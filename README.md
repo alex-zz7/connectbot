@@ -1,12 +1,16 @@
 # ConnectBot
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](./CONTRIBUTING.md)
+
 Open-source, self-hosted live chat for your website.
 
 One embeddable widget (a Crisp-style bubble), one admin console, optional AI
 auto-reply. Runs on Next.js + any Postgres. No migrations, no multi-tenant
 account system — you deploy it, it's yours.
 
-**Live example:** [sent2x.com](https://sent2x.com) runs its support chat on ConnectBot.
+**Try it live:** [sent2x.com/connectbot](https://sent2x.com/connectbot) — and
+[sent2x.com](https://sent2x.com) runs its real support chat on ConnectBot.
 
 ## Features
 
@@ -105,6 +109,13 @@ forms work, in any order relative to the script loading:
 
 Next.js (App Router) · Drizzle ORM · Postgres (`postgres` driver) ·
 Tailwind CSS v4. The widget itself is plain ES5 with zero dependencies.
+
+## Contributing
+
+Contributions are welcome — the codebase is small and easy to get into.
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for local setup (two env vars, no
+migrations), the project layout, and the PR flow. Good starting points are
+labeled [`good first issue`](https://github.com/alex-zz7/connectbot/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
 
 ---
 
