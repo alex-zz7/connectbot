@@ -4,6 +4,11 @@
   "private": true,
   "description": "Open-source, self-hosted live chat: one embeddable widget, one admin console, optional AI auto-reply.",
   "license": "MIT",
+  "homepage": "https://sent2x.com/connectbot",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alex-zz7/connectbot.git"
+  },
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "next build",
