@@ -297,8 +297,24 @@
     function teardown() {
       state.stopped = true;
       if (langObserver) langObserver.disconnect();
+      document.removeEventListener("pointerdown", onDocPointerDown, true);
       host.remove();
     }
+
+    // Clicking anywhere outside the widget collapses the panel, like the
+    // mainstream desktop widgets. Events from inside the shadow root retarget
+    // to the host element by the time they reach the document, so checking
+    // the host covers the whole widget (bubble, panel, emoji picker).
+    // On phones the panel is full-screen, so there is no outside to click.
+    // Capture phase, so host pages that stopPropagation() can't swallow it.
+    function onDocPointerDown(e) {
+      if (!state.open) return;
+      var inside = e.composedPath
+        ? e.composedPath().indexOf(host) !== -1
+        : host.contains(e.target);
+      if (!inside) closePanel();
+    }
+    document.addEventListener("pointerdown", onDocPointerDown, true);
 
     function relocalize() {
       applyLocale();
