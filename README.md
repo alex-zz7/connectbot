@@ -9,8 +9,13 @@ One embeddable widget (a Crisp-style bubble), one admin console, optional AI
 auto-reply. Runs on Next.js + any Postgres. No migrations, no multi-tenant
 account system — you deploy it, it's yours.
 
-**Try it live:** [sent2x.com/connectbot](https://sent2x.com/connectbot) — and
-[sent2x.com](https://sent2x.com) runs its real support chat on ConnectBot.
+**Try it live:** [sent2x.com/connectbot](https://sent2x.com/connectbot) — the
+bubble in the corner of that page *is* ConnectBot, answering from a knowledge
+base when nobody is at the desk.
+
+Built and maintained by the team behind [Sent2X](https://sent2x.com), an AI
+growth tool for X (Twitter). ConnectBot is what runs Sent2X's own support
+chat; we open-sourced it so you can run yours the same way.
 
 ## Features
 
@@ -178,6 +183,23 @@ OpenAI 兼容接口，如 DeepSeek）即启用。人工优先：你在后台（�
 的消息可撤回，两端都显示「已撤回一条消息」。后台输入框 Enter 发送、Shift+Enter 换行，
 编号步骤等格式会原样到达访客气泡。
 
+## Who makes this
+
+ConnectBot is maintained by [Sent2X](https://sent2x.com) — find the posts on X
+worth replying to, draft replies in your own voice, and schedule your own
+posts. If you grow an audience on X, that is the product we actually sell; the
+free plan needs no card, and the [Chrome extension](https://sent2x.com/install)
+puts the AI pen inside X's own reply box.
+
+Every conversation in this repo's own support bubble goes through the code you
+are reading, so bugs you hit are bugs we hit. Issues and PRs are welcome.
+
+**关于我们：** ConnectBot 由 [Sent2X](https://sent2x.com) 团队维护。Sent2X 是一个
+X（Twitter）AI 增长工具：找到值得回复的帖子、用你自己的语气起草回复、排程发帖。
+如果你也在 X 上做增长，可以试试——免费版无需绑卡，
+[Chrome 扩展](https://sent2x.com/install)会把 AI 蓝笔放进 X 自己的回复框里。
+
 ## License
 
-[MIT](./LICENSE)
+[MIT](./LICENSE) — use it, fork it, sell it. Keeping the small "We run on
+ConnectBot" line in the widget is appreciated but not required.

@@ -178,6 +178,13 @@ function Login({ onDone }: { onDone: () => void }) {
           {busy && <Loader2 className="w-4 h-4 animate-spin" />}
           Sign in
         </button>
+        <p className="mt-6 text-center text-[11px] text-muted/70 leading-relaxed">
+          ConnectBot is open source (MIT), made by the team behind{" "}
+          <a href="https://sent2x.com?from=connectbot-console" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground">
+            Sent2X
+          </a>
+          , an AI growth tool for X.
+        </p>
       </form>
     </div>
   );
@@ -896,6 +903,14 @@ export function Console() {
               <LogOut className="w-4 h-4" />
             </button>
           </div>
+          <a
+            href="https://sent2x.com?from=connectbot-console"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="shrink-0 block px-4 pb-2.5 text-[10px] text-muted/50 hover:text-muted"
+          >
+            Made by Sent2X · AI growth for X →
+          </a>
         </aside>
 
         <main className="flex-1 flex flex-col min-w-0">

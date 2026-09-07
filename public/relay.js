@@ -29,7 +29,10 @@
     } catch (e) {}
     return location.origin;
   })();
-  var REPO_URL = "https://github.com/alex-zz7/connectbot";
+  // Where the "We run on ConnectBot" footer link goes. The project page
+  // explains the widget and links to the repo; ?from tells us it came from a
+  // self-hosted widget rather than our own site.
+  var BRAND_URL = "https://sent2x.com/connectbot?from=widget-oss";
 
   // Language follows the site's own setting ("auto" | "en" | "zh"), which the
   // owner picks in the console. Only "auto" falls back to the visitor's
@@ -335,7 +338,7 @@
               '<button class="send" type="button" aria-label="Send message">' + ICONS.send + "</button>" +
             "</div>" +
           "</div>" +
-          '<a class="brand" href="' + REPO_URL + '" target="_blank" rel="noopener noreferrer"></a>' +
+          '<a class="brand" href="' + BRAND_URL + '" target="_blank" rel="noopener noreferrer"></a>' +
         "</div>" +
       "</div>";
     shadow.appendChild(wrap);

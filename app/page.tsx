@@ -42,6 +42,14 @@ export default function HomePage() {
             {`<script src="https://your-domain.com/relay.js" data-site="${siteId()}" async></script>`}
           </pre>
         </div>
+
+        <p className="mt-8 text-center text-xs text-muted/70">
+          Open source (MIT) · made by the team behind{" "}
+          <a href="https://sent2x.com?from=connectbot-home" className="underline hover:text-foreground">
+            Sent2X
+          </a>
+          , an AI growth tool for X.
+        </p>
       </div>
 
       {/* The exact snippet from the README, running on this very page. */}
