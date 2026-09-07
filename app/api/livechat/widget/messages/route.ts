@@ -1,4 +1,4 @@
-import { maybeAutoReply } from "@/lib/ai";
+import { autoReplyIfStillUnanswered, maybeAutoReply } from "@/lib/ai";
 import { corsJson, corsOptions } from "@/lib/cors";
 import {
   addMessage,
@@ -7,6 +7,7 @@ import {
   getWidgetConversation,
   listMessages,
   publicSiteConfig,
+  recallVisitorMessage,
   serializeMessage,
 } from "@/lib/db";
 import { waitUntil } from "@/lib/wait";
@@ -92,10 +93,29 @@ export async function POST(req: Request) {
   }
 
   const msg = await addMessage({ conversation, author: "visitor", text });
-  maybeAutoReply(site, conversation, text).catch(() => {});
+  maybeAutoReply(site, conversation, text)
+    .then((outcome) => {
+      if (outcome === "online") autoReplyIfStillUnanswered(site, conversation, msg);
+    })
+    .catch(() => {});
 
   return corsJson({
     message: serializeMessage(msg),
     config: publicSiteConfig(site),
   });
+}
+
+/** Visitor takes one of their own messages back (long-press → Unsend in the widget). */
+export async function DELETE(req: Request) {
+  const url = new URL(req.url);
+  const site = await getSite();
+  const conversation = await getWidgetConversation(site.id, url.searchParams.get("token") || "");
+  if (!conversation) return corsJson({ error: "Unknown session" }, { status: 404 });
+
+  const id = url.searchParams.get("id") || "";
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return corsJson({ error: "Invalid id" }, { status: 400 });
+
+  const recalled = await recallVisitorMessage(conversation, id);
+  if (!recalled) return corsJson({ error: "Cannot recall", code: "RECALL_DENIED" }, { status: 410 });
+  return corsJson({ message: serializeMessage(recalled) });
 }

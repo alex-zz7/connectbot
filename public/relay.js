@@ -29,11 +29,11 @@
     } catch (e) {}
     return location.origin;
   })();
-
   var REPO_URL = "https://github.com/alex-zz7/connectbot";
 
   // Language follows the site's own setting ("auto" | "en" | "zh"), which the
-  // owner picks in the console. Only "auto" falls back to the embedding page.
+  // owner picks in the console. Only "auto" falls back to the visitor's
+  // browser, so widget chrome can no longer disagree with the owner's copy.
   var isZh = /zh/i.test(navigator.language || "");
   var T;
 
@@ -44,20 +44,27 @@
       seen: zh ? "已读" : "Seen",
       from: zh ? "来自" : "from",
       online: zh ? "在线" : "Online",
+      botOnline: zh ? "AI 助手 · 在线" : "AI assistant · Online",
       offline: zh ? "离线" : "Away",
       attach: zh ? "附件即将推出" : "Attachments coming soon",
       empty: zh ? "发一条消息开始对话" : "Send a message to start",
+      welcome: zh ? "你好，有什么可以帮你？" : "Hi — how can we help?",
       minimize: zh ? "收起" : "Minimize",
       emoji: zh ? "表情" : "Emoji",
       jump: zh ? "回到最新" : "Jump to latest",
+      recall: zh ? "撤回" : "Unsend",
+      recalledMine: zh ? "你撤回了一条消息" : "You unsent a message",
+      recalledTheirs: zh ? "对方撤回了一条消息" : "A message was unsent",
+      recallExpired: zh ? "超过 2 分钟的消息不能撤回" : "Messages older than 2 minutes can't be unsent",
       brand: zh ? "由 <b>ConnectBot</b> 提供" : "We run on <b>ConnectBot</b>",
     };
   }
 
   // "auto" follows the page the widget is embedded in rather than the
   // visitor's browser: the host declares its language in <html lang>, which is
-  // also what a site's own language switcher updates. The browser locale is
-  // only the fallback for pages that declare nothing.
+  // also what a site's own language switcher updates. Matching the page keeps
+  // the bubble in the same language as the content around it. The browser
+  // locale is only the fallback for pages that declare nothing.
   function resolveZh(locale) {
     if (locale === "zh") return true;
     if (locale === "en") return false;
@@ -114,11 +121,57 @@
       .replace(/"/g, "&quot;");
   }
 
-  function linkify(s) {
-    return escapeHtml(s).replace(
-      /(https?:\/\/[^\s<]+)/g,
-      '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
-    );
+  // Inline marks on an already-escaped line: [label](url), bare URLs,
+  // **bold**, `code`. Bare-URL matching skips anything preceded by a quote
+  // or ">" so it never re-links the href it just produced.
+  function inlineMarks(s) {
+    return s
+      .replace(
+        /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,
+        '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'
+      )
+      .replace(
+        /(^|[^"'>])(https?:\/\/[^\s<]+)/g,
+        '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>'
+      )
+      .replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>")
+      .replace(/`([^`\n]+)`/g, "<code>$1</code>");
+  }
+
+  // The bot writes light markdown (numbered steps, headings, bold). Render it
+  // line by line as blocks so a tutorial reads as a list instead of raw
+  // asterisks and hashes. Everything is escaped first; only tags we emit here
+  // reach the DOM.
+  function formatMessage(text) {
+    var lines = escapeHtml(text).split("\n");
+    var out = [];
+    var gap = false;
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      var m;
+      if (!line.trim() || /^\s*([-*_]\s*){3,}$/.test(line)) {
+        gap = true;
+        continue;
+      }
+      var cls = "";
+      var body;
+      if ((m = /^#{1,6}\s+(.*)$/.exec(line))) {
+        cls = "h";
+        body = inlineMarks(m[1]);
+      } else if ((m = /^\s*[-*•]\s+(.*)$/.exec(line))) {
+        cls = "li";
+        body = '<span class="mk">•</span><span>' + inlineMarks(m[1]) + "</span>";
+      } else if ((m = /^\s*(\d{1,2})[.)]\s+(.*)$/.exec(line))) {
+        cls = "li";
+        body = '<span class="mk">' + m[1] + ".</span><span>" + inlineMarks(m[2]) + "</span>";
+      } else {
+        body = inlineMarks(line);
+      }
+      if (gap && out.length) cls += " gap";
+      gap = false;
+      out.push("<p" + (cls.trim() ? ' class="' + cls.trim() + '"' : "") + ">" + body + "</p>");
+    }
+    return out.join("");
   }
 
   var css = function (color) {
@@ -142,6 +195,12 @@
       ".av{width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,.2);display:flex;align-items:center;justify-content:center;font:700 14px/1 system-ui;position:relative;flex-shrink:0;}",
       ".dot{position:absolute;right:0;bottom:0;width:10px;height:10px;border-radius:50%;border:2px solid " + color + ";background:#22c55e;}",
       ".dot.off{background:#cbd5e1;}",
+      ".av svg{width:22px;height:22px;fill:currentColor;}",
+      ".row .av svg{width:15px;height:15px;}",
+      ".row .av.bot{background:" + color + ";color:#fff;}",
+      ".av.bot{background:#fff;}",
+      ".av .botimg{width:100%;height:100%;object-fit:cover;border-radius:50%;display:block;}",
+      ".row .av.bot{background:#fff;}",
       ".who{flex:1;min-width:0;}",
       ".who b{display:block;font:700 15px/1.25 system-ui;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}",
       ".who span{display:block;font:400 12px/1.35 system-ui;opacity:.85;}",
@@ -150,8 +209,8 @@
       ".min svg{width:20px;height:20px;fill:currentColor;}",
       ".mid{position:relative;flex:1;min-height:0;display:flex;background:#f7f8fa;}",
       // overscroll-behavior stops the wheel/touch from chaining to the host
-      // page once the thread hits an edge. The scrollbar is styled so the
-      // thread reads as scrollable.
+      // page once the thread hits an edge — the "it scrolls the site behind"
+      // bug. The scrollbar is styled so the thread reads as scrollable.
       ".msgs{flex:1;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:16px 14px 12px;display:flex;flex-direction:column;gap:10px;}",
       ".msgs::-webkit-scrollbar{width:6px;}",
       ".msgs::-webkit-scrollbar-thumb{background:rgba(15,23,42,.18);border-radius:999px;}",
@@ -161,9 +220,26 @@
       ".row.me{align-self:flex-end;flex-direction:row-reverse;}",
       ".row .av{width:24px;height:24px;font-size:10px;background:#e2e8f0;color:#334155;}",
       ".bubble{padding:11px 14px;border-radius:16px;font:400 15px/1.5 system-ui;color:#0f172a;background:#e9edf2;word-break:break-word;white-space:pre-wrap;}",
-      ".row.me .bubble{background:" + color + ";color:#fff;border-bottom-right-radius:5px;}",
+      // Own bubbles are long-pressed to unsend; suppress the text-selection
+      // callout iOS would otherwise show for the same gesture.
+      ".row.me .bubble{background:" + color + ";color:#fff;border-bottom-right-radius:5px;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;}",
+      ".row.me.held .bubble{filter:brightness(.85);}",
+      ".recalled{align-self:center;color:#94a3b8;font:400 12px/1 system-ui;padding:4px 0;}",
+      ".act{position:absolute;z-index:5;transform:translate(-50%,-100%);background:#111827;color:#fff;border-radius:10px;padding:4px;display:flex;gap:2px;box-shadow:0 6px 18px rgba(15,23,42,.25);}",
+      ".act:after{content:'';position:absolute;left:50%;bottom:-5px;width:10px;height:10px;background:#111827;transform:translateX(-50%) rotate(45deg);border-radius:2px;}",
+      ".act button{border:0;background:transparent;color:inherit;font:500 13px/1 system-ui;padding:7px 12px;border-radius:7px;cursor:pointer;white-space:nowrap;}",
+      ".act button:hover{background:rgba(255,255,255,.12);}",
+      ".toast{position:absolute;left:50%;bottom:72px;transform:translateX(-50%);background:rgba(17,24,39,.92);color:#fff;font:400 12px/1 system-ui;padding:8px 12px;border-radius:999px;white-space:nowrap;z-index:6;}",
       ".row.them .bubble{border-bottom-left-radius:5px;}",
       ".bubble a{color:inherit;text-decoration:underline;}",
+      ".bubble p{margin:0;}",
+      ".bubble p.gap{margin-top:8px;}",
+      ".bubble p.h{font-weight:700;}",
+      ".bubble p.li{display:flex;gap:6px;}",
+      ".bubble p.li .mk{flex:none;min-width:14px;text-align:right;}",
+      ".bubble p.li .mk+span{min-width:0;}",
+      ".bubble code{font:400 13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;background:rgba(15,23,42,.08);padding:1px 5px;border-radius:5px;}",
+      ".row.me .bubble code{background:rgba(255,255,255,.22);}",
       ".meta{align-self:flex-end;font:400 11px/1 system-ui;color:" + color + ";margin-top:-4px;}",
       ".aname{font:600 12px/1 system-ui;color:#64748b;margin:2px 0 -4px 32px;}",
       ".jump{position:absolute;right:14px;bottom:14px;width:34px;height:34px;border:0;border-radius:50%;background:#fff;color:" + color + ";cursor:pointer;box-shadow:0 4px 14px rgba(15,23,42,.18);display:flex;align-items:center;justify-content:center;}",
@@ -189,10 +265,17 @@
       ".emoji button{width:32px;height:32px;border:0;background:transparent;font-size:18px;cursor:pointer;border-radius:8px;}",
       ".emoji button:hover{background:#f1f5f9;}",
       ".toast{position:absolute;left:14px;right:14px;bottom:14px;background:#0f172a;color:#fff;font:500 12px/1.35 system-ui;padding:9px 11px;border-radius:9px;text-align:center;}",
-      // Full screen on phones, respecting notches and home bars. The 16px
-      // input font stops iOS from zooming the page when the field is focused.
+      // Full screen on phones. The wrap is an opaque cover pinned to the
+      // layout viewport (inset:0) and must never shrink with the keyboard —
+      // that hole is the landing page flashing through. JS docks only the
+      // panel to visualViewport. Do not put overflow:hidden on the wrap —
+      // iOS scroll-into-view treats that as a scrollport and can push the
+      // chat out of view.
       "@media(max-width:520px){",
-      ".panel{right:0;left:0;bottom:0;width:100%;min-height:0;height:100%;height:100dvh;border-radius:0;}",
+      ".wrap.open{position:fixed;inset:0;background:#fff;z-index:2147483000;}",
+      ".wrap.open .panel{position:absolute;inset:0;width:100%;height:100%;min-height:0;border-radius:0;transform:none;transition:none;}",
+      ".panel{right:0;left:0;top:0;bottom:0;width:100%;min-height:0;height:100%;border-radius:0;transform:none;transition:none;}",
+      ".wrap.open .fab{display:none;}",
       ".head{padding-top:calc(12px + env(safe-area-inset-top,0px));}",
       ".foot{padding-bottom:calc(8px + env(safe-area-inset-bottom,0px));}",
       "textarea{font-size:16px;}",
@@ -203,6 +286,8 @@
 
   var ICONS = {
     chat: '<svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>',
+    // Robot head: the avatar shown when the bot is the one answering.
+    bot: '<svg viewBox="0 0 24 24"><path d="M12 2a1 1 0 0 1 1 1v1.06A6 6 0 0 1 18 10v1h1a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2h-1.1A6 6 0 0 1 12 22a6 6 0 0 1-5.9-4H5a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h1v-1a6 6 0 0 1 5-5.94V3a1 1 0 0 1 1-1zm0 4a4 4 0 0 0-4 4v6a4 4 0 0 0 8 0v-6a4 4 0 0 0-4-4zm-2.5 4a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zm5 0a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zM10 16h4a1 1 0 0 1 0 2h-4a1 1 0 0 1 0-2z"/></svg>',
     close: '<svg viewBox="0 0 24 24"><path d="M18.3 5.71L12 12.01l-6.3-6.3-1.4 1.41 6.29 6.3-6.3 6.29 1.42 1.41 6.29-6.29 6.3 6.3 1.41-1.42-6.29-6.29 6.3-6.3z"/></svg>',
     min: '<svg viewBox="0 0 24 24"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></svg>',
     down: '<svg viewBox="0 0 24 24"><path d="M12 16.5L5.5 10l1.42-1.41L12 13.67l5.08-5.08L18.5 10z"/></svg>',
@@ -215,36 +300,39 @@
     var host = document.createElement("div");
     host.id = "relay-root";
     var shadow = host.attachShadow({ mode: "open" });
-    document.body.appendChild(host);
+    // Outside <body> so lockPage's body{position:fixed} cannot trap
+    // position:fixed descendants (iOS then mis-places the cover).
+    document.documentElement.appendChild(host);
 
     var style = document.createElement("style");
     shadow.appendChild(style);
 
     var wrap = document.createElement("div");
+    wrap.className = "wrap";
     wrap.innerHTML =
-      '<button class="fab" type="button">' + ICONS.chat + '<span class="badge" hidden>0</span></button>' +
+      '<button class="fab" type="button" aria-label="Open chat">' + ICONS.chat + '<span class="badge" hidden>0</span></button>' +
       '<div class="panel">' +
         '<div class="head">' +
           '<div class="chip">' + ICONS.chat + "<span></span></div>" +
           '<div class="agent">' +
             '<div class="av">C<span class="dot"></span></div>' +
             '<div class="who"><b></b><span></span></div>' +
-            '<button class="min" type="button">' + ICONS.min + "</button>" +
+            '<button class="min" type="button" aria-label="Minimize chat">' + ICONS.min + "</button>" +
           "</div>" +
         "</div>" +
         '<div class="mid">' +
           '<div class="msgs"></div>' +
-          '<button class="jump" type="button" hidden>' + ICONS.down + "</button>" +
+          '<button class="jump" type="button" hidden aria-label="Jump to latest message">' + ICONS.down + "</button>" +
         "</div>" +
         '<div class="foot">' +
           '<div class="box">' +
             '<textarea rows="1"></textarea>' +
             '<div class="row2">' +
               '<div class="tools">' +
-                '<button class="icon smile" type="button">' + ICONS.smile + "</button>" +
-                '<button class="icon clip" type="button">' + ICONS.clip + "</button>" +
+                '<button class="icon smile" type="button" aria-label="Insert emoji">' + ICONS.smile + "</button>" +
+                '<button class="icon clip" type="button" aria-label="Attach file">' + ICONS.clip + "</button>" +
               "</div>" +
-              '<button class="send" type="button">' + ICONS.send + "</button>" +
+              '<button class="send" type="button" aria-label="Send message">' + ICONS.send + "</button>" +
             "</div>" +
           "</div>" +
           '<a class="brand" href="' + REPO_URL + '" target="_blank" rel="noopener noreferrer"></a>' +
@@ -284,8 +372,11 @@
         name: "Support",
         color: "#1972F5",
         agentName: "Support",
+        botName: "",
+        botAvatar: "",
         welcomeMessage: "",
         online: false,
+        botActive: false,
         locale: "auto",
         enabled: true,
       },
@@ -294,10 +385,229 @@
       emojiOpen: false,
     };
 
+    var pageLock = null;
+
+    function pinHostScroll(y) {
+      try {
+        window.scrollTo({ top: y, left: 0, behavior: "auto" });
+      } catch (e) {
+        window.scrollTo(0, y);
+      }
+    }
+
+    function holdHostScroll() {
+      document.documentElement.style.scrollBehavior = "auto";
+    }
+
+    function releaseHostScroll() {
+      document.documentElement.style.scrollBehavior = "";
+    }
+
+    function isPhone() {
+      return window.matchMedia("(max-width: 520px)").matches;
+    }
+
+    var keepKb = false;
+    var holdFull = false;
+    var hostLockStyle = null;
+    try { sessionStorage.removeItem("relay_kb"); } catch (e) {}
+
+    // Phone layout: the WRAP is a full-layout-viewport white cover. The
+    // PANEL docks to visualViewport so the composer stays above the
+    // keyboard. Never shrink the wrap to vv — that left a hole of the
+    // host page between the composer and the iOS keyboard. Never size
+    // the panel from innerHeight - vv.height (double-subtract). Never
+    // persist a keyboard px. Keep in sync with lib/livechat/viewport-dock.ts.
+    function resetShellScroll() {
+      try {
+        if (wrap.scrollTop) wrap.scrollTop = 0;
+        if (wrap.scrollLeft) wrap.scrollLeft = 0;
+        if (panel.scrollTop) panel.scrollTop = 0;
+        if (panel.scrollLeft) panel.scrollLeft = 0;
+      } catch (e) {}
+    }
+
+    function clearPanelInline() {
+      panel.style.top = "";
+      panel.style.left = "";
+      panel.style.right = "";
+      panel.style.bottom = "";
+      panel.style.width = "";
+      panel.style.height = "";
+      panel.style.maxHeight = "";
+      panel.style.paddingBottom = "";
+      panel.style.transition = "";
+    }
+
+    function coverLayoutViewport() {
+      // Drop leftover inline geometry so .wrap.open { inset:0 } covers the
+      // layout viewport. Do not assign top/height here — that is what used
+      // to punch a hole down to the host page.
+      wrap.style.position = "";
+      wrap.style.inset = "";
+      wrap.style.top = "";
+      wrap.style.left = "";
+      wrap.style.right = "";
+      wrap.style.bottom = "";
+      wrap.style.width = "";
+      wrap.style.height = "";
+    }
+
+    function undockFromVisualViewport() {
+      wrap.style.position = "";
+      wrap.style.inset = "";
+      wrap.style.top = "";
+      wrap.style.left = "";
+      wrap.style.right = "";
+      wrap.style.bottom = "";
+      wrap.style.width = "";
+      wrap.style.height = "";
+      clearPanelInline();
+      resetShellScroll();
+    }
+
+    function restorePanelNow() {
+      if (!state.open || !isPhone()) return;
+      holdFull = true;
+      coverLayoutViewport();
+      clearPanelInline();
+      resetShellScroll();
+    }
+
+    function dockToVisualViewport() {
+      if (!state.open || !isPhone()) {
+        undockFromVisualViewport();
+        return;
+      }
+      if (holdFull) {
+        var live = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+        if (live < window.innerHeight - 24) return;
+        holdFull = false;
+      }
+      resetShellScroll();
+      coverLayoutViewport();
+
+      var vv = window.visualViewport;
+      // Same as lib/livechat/viewport-dock.ts — never chase offsetTop.
+      // iOS sets it while scrolling the input into view; applying it is
+      // the "jumps too high, then settles" bounce.
+      var width = vv ? Math.round(vv.width) : Math.round(window.innerWidth);
+      var height = vv ? Math.round(vv.height) : Math.round(window.innerHeight);
+      if (height < 160) height = Math.round(window.innerHeight);
+      if (width < 160) width = Math.round(window.innerWidth);
+
+      panel.style.position = "absolute";
+      panel.style.inset = "auto";
+      panel.style.top = "0";
+      panel.style.left = "0";
+      panel.style.right = "auto";
+      panel.style.bottom = "auto";
+      panel.style.width = width + "px";
+      panel.style.height = height + "px";
+      panel.style.maxHeight = height + "px";
+    }
+
+    function onViewportChange() {
+      if (!state.open || !isPhone()) {
+        undockFromVisualViewport();
+        return;
+      }
+      dockToVisualViewport();
+    }
+
+    // iOS scroll-into-view moves visualViewport.offsetTop and the panel's
+    // scrollTop. Undo the scroll; do not dock from it (that re-applies the jump).
+    function onViewportScroll() {
+      resetShellScroll();
+    }
+
+    function setOpenFlag(open) {
+      document.documentElement.classList.toggle("relay-open", open);
+      document.documentElement.dataset.relayOpen = open ? "1" : "";
+      try {
+        window.dispatchEvent(new CustomEvent("relay:open", { detail: { open: open } }));
+      } catch (e) {}
+    }
+
+    function lockPage() {
+      if (pageLock || !isPhone()) return;
+      pageLock = {
+        overflow: document.documentElement.style.overflow,
+        bodyOverflow: document.body.style.overflow,
+        bodyPosition: document.body.style.position,
+        bodyTop: document.body.style.top,
+        bodyWidth: document.body.style.width,
+        scrollY: window.scrollY || window.pageYOffset || 0,
+      };
+      document.documentElement.style.overflow = "hidden";
+      document.body.style.overflow = "hidden";
+      document.body.style.position = "fixed";
+      document.body.style.top = "-" + pageLock.scrollY + "px";
+      document.body.style.width = "100%";
+      if (!hostLockStyle) {
+        hostLockStyle = document.createElement("style");
+        hostLockStyle.textContent = "html,html body{scroll-behavior:auto!important;}";
+        document.head.appendChild(hostLockStyle);
+      }
+    }
+
+    function unlockPage() {
+      if (!pageLock) return;
+      document.documentElement.style.overflow = pageLock.overflow;
+      document.body.style.overflow = pageLock.bodyOverflow;
+      document.body.style.position = pageLock.bodyPosition;
+      document.body.style.top = pageLock.bodyTop;
+      document.body.style.width = pageLock.bodyWidth;
+      var y = pageLock.scrollY;
+      pageLock = null;
+      pinHostScroll(y);
+      if (hostLockStyle) {
+        hostLockStyle.remove();
+        hostLockStyle = null;
+      }
+    }
+
+    function focusComposer() {
+      try {
+        input.focus({ preventScroll: true });
+      } catch (e) {
+        input.focus();
+      }
+    }
+
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", onViewportChange);
+      window.visualViewport.addEventListener("scroll", onViewportScroll);
+    }
+    window.addEventListener("resize", onViewportChange);
+    wrap.addEventListener("scroll", resetShellScroll);
+    panel.addEventListener("scroll", resetShellScroll);
+    try {
+      if (navigator.virtualKeyboard) {
+        navigator.virtualKeyboard.overlaysContent = true;
+        navigator.virtualKeyboard.addEventListener("geometrychange", onViewportChange);
+      }
+    } catch (e) {}
+
     function teardown() {
       state.stopped = true;
       if (langObserver) langObserver.disconnect();
       document.removeEventListener("pointerdown", onDocPointerDown, true);
+      window.removeEventListener("wheel", onWidgetWheel, true);
+      if (window.visualViewport) {
+        window.visualViewport.removeEventListener("resize", onViewportChange);
+        window.visualViewport.removeEventListener("scroll", onViewportScroll);
+      }
+      window.removeEventListener("resize", onViewportChange);
+      holdFull = false;
+      undockFromVisualViewport();
+      try {
+        if (navigator.virtualKeyboard) {
+          navigator.virtualKeyboard.removeEventListener("geometrychange", onViewportChange);
+        }
+      } catch (e) {}
+      setOpenFlag(false);
+      unlockPage();
       host.remove();
     }
 
@@ -315,6 +625,24 @@
       if (!inside) closePanel();
     }
     document.addEventListener("pointerdown", onDocPointerDown, true);
+
+    // Wheel events from the widget retarget to #relay-root by the time they
+    // reach the document. A header/footer wheel (not a scrollport) then
+    // scrolls the landing page behind the panel. Contain that here.
+    function onWidgetWheel(e) {
+      if (!state.open) return;
+      var path = e.composedPath ? e.composedPath() : [];
+      if (path.indexOf(host) === -1 && path.indexOf(wrap) === -1) return;
+      var overMsgs = path.indexOf(msgsEl) !== -1;
+      if (overMsgs && msgsEl.scrollHeight > msgsEl.clientHeight + 1) {
+        var dy = e.deltaY;
+        var atTop = msgsEl.scrollTop <= 0;
+        var atBottom = msgsEl.scrollTop + msgsEl.clientHeight >= msgsEl.scrollHeight - 1;
+        if (!((dy < 0 && atTop) || (dy > 0 && atBottom))) return;
+      }
+      e.preventDefault();
+    }
+    window.addEventListener("wheel", onWidgetWheel, { capture: true, passive: false });
 
     function relocalize() {
       applyLocale();
@@ -334,12 +662,33 @@
       jumpBtn.setAttribute("aria-label", T.jump);
     }
 
+    // Who the visitor is talking to right now: the owner when they are online,
+    // otherwise the bot (if it is switched on). The header carries that name,
+    // and "online" means someone — human or bot — will answer.
+    function speaker() {
+      if (!state.config.online && state.config.botActive) {
+        return { name: state.config.botName || state.config.agentName, bot: true, online: true };
+      }
+      return { name: state.config.agentName, bot: false, online: !!state.config.online };
+    }
+
+    // The bot's face: the owner's upload (a data: URL) or the default shipped
+    // with the site. Falls back to the inline robot if the image cannot load.
+    function botImg() {
+      var src = state.config.botAvatar || (BASE + "/bot-avatar.png");
+      return '<img class="botimg" alt="" src="' + escapeHtml(src) + '" onerror="this.outerHTML=' +
+        escapeHtml(JSON.stringify(ICONS.bot)) + '">';
+    }
+
     function applyTheme() {
       style.textContent = css(state.config.color || "#1972F5");
-      avEl.firstChild.textContent = initials(state.config.agentName);
-      nameEl.textContent = state.config.agentName + " " + T.from + " " + state.config.name;
-      subEl.textContent = state.config.online ? T.online : T.offline;
-      dotEl.classList.toggle("off", !state.config.online);
+      var who = speaker();
+      avEl.innerHTML = (who.bot ? botImg() : escapeHtml(initials(who.name))) + '<span class="dot"></span>';
+      dotEl = wrap.querySelector(".dot");
+      avEl.classList.toggle("bot", who.bot);
+      nameEl.textContent = who.name + " " + T.from + " " + state.config.name;
+      subEl.textContent = who.online ? (who.bot ? T.botOnline : T.online) : T.offline;
+      dotEl.classList.toggle("off", !who.online);
     }
 
     // A single place to absorb server config so the locale switch, the theme
@@ -360,8 +709,8 @@
       applyTheme();
     }
 
-    // The host page may switch language at runtime, so the bubble tracks
-    // <html lang> while the owner keeps the widget on "auto".
+    // The host page may switch language at runtime — our own site's toggle
+    // rewrites <html lang> without reloading — so the bubble tracks it.
     function watchPageLang() {
       if (typeof MutationObserver !== "function") return;
       langObserver = new MutationObserver(function () {
@@ -417,15 +766,37 @@
     }
 
     /**
-     * The DOM is only touched when the markup actually changed, and the
-     * viewport is restored unless the reader was already at the end (or just
-     * sent something) — so polling never yanks the reader mid-scroll.
+     * Polling used to rewrite the thread and force-scroll to the bottom every
+     * cycle, which yanked the reader back down mid-scroll and killed touch
+     * momentum. Now the DOM is only touched when the markup actually changed,
+     * and the viewport is restored unless the reader was already at the end
+     * (or just sent something).
      */
     function render(force) {
       var html = [];
       var list = state.messages.slice();
-      if (list.length === 0 && state.config.welcomeMessage) {
-        list = [{ id: "welcome", author: "bot", text: state.config.welcomeMessage, createdAt: new Date().toISOString() }];
+      var welcome = (state.config.welcomeMessage || "").trim() || T.welcome;
+      // Welcome is client-only and never persisted. Keep it as the first
+      // bubble after the visitor replies, but do not duplicate if the
+      // server later returns the same line from the agent or bot.
+      if (welcome) {
+        var hasWelcome = false;
+        for (var w = 0; w < list.length; w++) {
+          var wm = list[w];
+          if (wm.id === "welcome") { hasWelcome = true; break; }
+          if (wm.author !== "visitor" && (wm.text || "").trim() === welcome) {
+            hasWelcome = true;
+            break;
+          }
+        }
+        if (!hasWelcome) {
+          list = [{
+            id: "welcome",
+            author: "bot",
+            text: welcome,
+            createdAt: list.length ? list[0].createdAt : new Date().toISOString(),
+          }].concat(list);
+        }
       }
       var lastStamp = 0;
       for (var i = 0; i < list.length; i++) {
@@ -436,11 +807,19 @@
           lastStamp = ts;
         }
         var mine = m.author === "visitor";
-        if (!mine) html.push('<div class="aname">' + escapeHtml(state.config.agentName) + "</div>");
+        if (m.recalledAt) {
+          html.push('<div class="recalled">' + (mine ? T.recalledMine : T.recalledTheirs) + "</div>");
+          continue;
+        }
+        // Each bubble is labelled by who wrote it, not by who is online now:
+        // a bot answer stays the bot's after the owner comes back.
+        var fromBot = m.author === "bot" || (m.id === "welcome" && speaker().bot);
+        var authorName = fromBot ? (state.config.botName || state.config.agentName) : state.config.agentName;
+        if (!mine) html.push('<div class="aname">' + escapeHtml(authorName) + "</div>");
         html.push(
-          '<div class="row ' + (mine ? "me" : "them") + '">' +
-            (mine ? "" : '<div class="av">' + escapeHtml(initials(state.config.agentName)) + "</div>") +
-            '<div class="bubble">' + linkify(m.text) + "</div>" +
+          '<div class="row ' + (mine ? "me" : "them") + '" data-id="' + escapeHtml(m.id) + '">' +
+            (mine ? "" : '<div class="av' + (fromBot ? " bot" : "") + '">' + (fromBot ? botImg() : escapeHtml(initials(authorName))) + "</div>") +
+            '<div class="bubble">' + formatMessage(m.text) + "</div>" +
           "</div>"
         );
         if (mine && i === list.length - 1 && state.lastReadAt) {
@@ -469,6 +848,19 @@
       state.messages = Object.keys(map)
         .map(function (k) { return map[k]; })
         .sort(function (a, b) { return new Date(a.createdAt) - new Date(b.createdAt); });
+    }
+
+    // Newest timestamp we hold, counting recalls: the server sends anything
+    // created or recalled after this, so a recall must advance the cursor or
+    // every long poll would return the same recalled row immediately.
+    function messageCursor() {
+      var max = "";
+      for (var i = 0; i < state.messages.length; i++) {
+        var m = state.messages[i];
+        if (m.createdAt > max) max = m.createdAt;
+        if (m.recalledAt && m.recalledAt > max) max = m.recalledAt;
+      }
+      return max;
     }
 
     async function api(path, opts) {
@@ -527,7 +919,7 @@
     async function poll(wait) {
       if (!state.token) return;
       try {
-        var after = state.messages.length ? state.messages[state.messages.length - 1].createdAt : "";
+        var after = messageCursor();
         var q = "/api/livechat/widget/messages?site=" + encodeURIComponent(state.siteId) +
           "&token=" + encodeURIComponent(state.token) +
           (after ? "&after=" + encodeURIComponent(after) : "") +
@@ -560,6 +952,10 @@
       input.value = "";
       resize();
       sendBtn.classList.remove("on");
+      // Send on iOS blurs the field and starts the keyboard hide. Put
+      // focus back so the next line stays on the keyboard; 完成 is what
+      // dismisses, and that path is now a single expand.
+      if (isPhone()) focusComposer();
       try {
         if (!state.token) await ensureSession();
         // Identity rides along on every message too: whatever ordering the
@@ -591,21 +987,52 @@
     function openPanel() {
       state.open = true;
       panel.classList.add("open");
+      wrap.classList.add("open");
       fab.innerHTML = ICONS.close;
+      setOpenFlag(true);
+      // Paint the full-screen cover before lockPage jumps the host page.
+      if (isPhone()) coverLayoutViewport();
+      lockPage();
+      dockToVisualViewport();
       updateBadge();
       render(true);
       ensureSession().then(function () {
-        if (!state.stopped) input.focus();
+        if (state.stopped || !state.open) return;
+        if (!isPhone()) focusComposer();
       });
     }
 
     function closePanel() {
+      if (!state.open) return;
+      // html { scroll-behavior: smooth } would animate unlockPage's restore
+      // into a visible homepage roll. Blurring the composer can also make
+      // the browser scroll-into-view the host page behind the panel.
+      holdHostScroll();
+      var y = pageLock ? pageLock.scrollY : (window.scrollY || window.pageYOffset || 0);
+      try { input.blur(); } catch (e) {}
+      try {
+        var ae = shadow.activeElement;
+        if (ae && typeof ae.blur === "function") ae.blur();
+      } catch (e) {}
+      try { if (document.activeElement === host) host.blur(); } catch (e) {}
+      pinHostScroll(y);
+
       state.open = false;
       panel.classList.remove("open");
+      wrap.classList.remove("open");
       fab.innerHTML = ICONS.chat + '<span class="badge" hidden>0</span>';
       badge = wrap.querySelector(".badge");
+      setOpenFlag(false);
+      unlockPage();
+      holdFull = false;
+      undockFromVisualViewport();
       updateBadge();
       hideEmoji();
+      pinHostScroll(y);
+      requestAnimationFrame(function () {
+        pinHostScroll(y);
+        releaseHostScroll();
+      });
     }
 
     function hideEmoji() {
@@ -624,7 +1051,142 @@
       scrollToBottom();
       updateJump();
     });
+
+    // ── Unsend: hold one of your own bubbles (or right-click on desktop) ──
+    var RECALL_WINDOW_MS = 2 * 60 * 1000;
+    var midEl = wrap.querySelector(".mid");
+    var actEl = null;
+    var holdTimer = null;
+    var holdStart = null;
+
+    function messageById(id) {
+      for (var i = 0; i < state.messages.length; i++) {
+        if (state.messages[i].id === id) return state.messages[i];
+      }
+      return null;
+    }
+
+    function hideActions() {
+      if (actEl) {
+        actEl.remove();
+        actEl = null;
+      }
+      var held = msgsEl.querySelector(".row.held");
+      if (held) held.classList.remove("held");
+    }
+
+    function toast(text) {
+      var el = document.createElement("div");
+      el.className = "toast";
+      el.textContent = text;
+      midEl.appendChild(el);
+      setTimeout(function () { el.remove(); }, 1800);
+    }
+
+    function showActions(row) {
+      hideActions();
+      var m = messageById(row.getAttribute("data-id"));
+      if (!m || m.author !== "visitor" || m.recalledAt) return;
+      if (Date.now() - new Date(m.createdAt).getTime() > RECALL_WINDOW_MS) {
+        toast(T.recallExpired);
+        return;
+      }
+      row.classList.add("held");
+      var br = row.querySelector(".bubble").getBoundingClientRect();
+      var mr = midEl.getBoundingClientRect();
+      actEl = document.createElement("div");
+      actEl.className = "act";
+      actEl.innerHTML = '<button type="button">' + T.recall + "</button>";
+      actEl.querySelector("button").addEventListener("click", function () {
+        var id = m.id;
+        hideActions();
+        recall(id);
+      });
+      midEl.appendChild(actEl);
+      var ar = actEl.getBoundingClientRect();
+      var left = br.left + br.width / 2 - mr.left;
+      left = Math.max(ar.width / 2 + 8, Math.min(mr.width - ar.width / 2 - 8, left));
+      actEl.style.left = left + "px";
+      // Above the bubble unless it sits under the header, then below it.
+      var top = br.top - mr.top - 8;
+      if (top - ar.height < 4) {
+        top = br.bottom - mr.top + 12;
+        actEl.style.transform = "translate(-50%,0)";
+      }
+      actEl.style.top = top + "px";
+    }
+
+    function cancelHold() {
+      clearTimeout(holdTimer);
+      holdTimer = null;
+      holdStart = null;
+    }
+
+    async function recall(id) {
+      try {
+        var data = await api(
+          "/api/livechat/widget/messages?site=" + encodeURIComponent(state.siteId) +
+            "&token=" + encodeURIComponent(state.token) +
+            "&id=" + encodeURIComponent(id),
+          { method: "DELETE" }
+        );
+        if (data.message) mergeMessages([data.message]);
+        render();
+      } catch (e) {
+        if (/410/.test(String(e && e.message))) toast(T.recallExpired);
+      }
+    }
+
+    msgsEl.addEventListener("pointerdown", function (e) {
+      var row = e.target && e.target.closest ? e.target.closest(".row.me") : null;
+      // Any tap in the thread dismisses an open menu.
+      hideActions();
+      if (!row || (e.pointerType === "mouse" && e.button !== 0)) return;
+      holdStart = { x: e.clientX, y: e.clientY };
+      holdTimer = setTimeout(function () {
+        holdTimer = null;
+        showActions(row);
+      }, 450);
+    });
+    msgsEl.addEventListener("pointermove", function (e) {
+      if (!holdTimer || !holdStart) return;
+      if (Math.abs(e.clientX - holdStart.x) > 8 || Math.abs(e.clientY - holdStart.y) > 8) cancelHold();
+    });
+    msgsEl.addEventListener("pointerup", cancelHold);
+    msgsEl.addEventListener("pointercancel", cancelHold);
+    msgsEl.addEventListener("scroll", hideActions);
+    msgsEl.addEventListener("contextmenu", function (e) {
+      var row = e.target && e.target.closest ? e.target.closest(".row.me") : null;
+      if (!row) return;
+      e.preventDefault();
+      cancelHold();
+      showActions(row);
+    });
     sendBtn.addEventListener("click", send);
+    function armKeepKb() { keepKb = true; }
+    sendBtn.addEventListener("pointerdown", armKeepKb);
+    smileBtn.addEventListener("pointerdown", armKeepKb);
+    input.addEventListener("touchend", function (e) {
+      if (document.activeElement === input) return;
+      e.preventDefault();
+      focusComposer();
+    });
+    input.addEventListener("focus", function () {
+      keepKb = false;
+      holdFull = false;
+      resetShellScroll();
+      dockToVisualViewport();
+    });
+    input.addEventListener("blur", function () {
+      if (keepKb) {
+        keepKb = false;
+        return;
+      }
+      // Expand on this turn. Waiting for visualViewport.resize is the stall.
+      // The wrap already covers the layout viewport, so this cannot flash
+      // the host page. Later shrink events are ignored until the keyboard is gone.
+      restorePanelNow();
+    });
     input.addEventListener("input", function () {
       resize();
       sendBtn.classList.toggle("on", !!(input.value || "").trim());

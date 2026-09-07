@@ -16,12 +16,21 @@ account system — you deploy it, it's yours.
 
 - **Widget** — `public/relay.js`, a dependency-free script in a shadow root.
   Doesn't leak CSS, full-screen on phones, long-polls for replies, English/中文
-  chrome that follows the embedding page's `<html lang>`.
+  chrome that follows the embedding page's `<html lang>`. Renders the light
+  markdown the bot writes (numbered steps, bold, links). Visitors can **unsend**
+  a message within two minutes by holding their bubble.
 - **Console** — `/console`, a ChatGPT-style inbox: conversation list with
-  unread badges, live thread view, reply, delete, widget settings (name,
-  color, welcome message, language, on/off switch).
-- **AI auto-reply (optional)** — answers visitors until a human replies in the
-  thread. Works with any OpenAI-compatible API.
+  unread badges, live thread view, multi-line replies (Enter sends,
+  Shift+Enter breaks the line), unsend your own or the bot's messages, delete
+  threads, widget settings (name, color, welcome message, language, on/off).
+- **AI auto-reply (optional)** — humans first: the bot answers only while you
+  are away (no visible console tab for a minute, or you tapped your name to go
+  away) and steps out of any thread you have replied in. Visitors see the
+  bot's own name and avatar while it is the one answering. Works with any
+  OpenAI-compatible API.
+- **Knowledge base** — `public/bot-knowledge.md` holds your tutorials and FAQ;
+  one click in the console syncs it into the bot, which then reproduces the
+  matching section in full instead of improvising.
 - **Identity passthrough** — host pages with their own login can hand the
   visitor's name/email/avatar to the widget.
 - **Zero-migration Postgres** — tables are created idempotently at runtime.
@@ -101,9 +110,26 @@ forms work, in any order relative to the script loading:
 - Conversations appear in real time (long-polling, no websockets to operate).
 - Replying as a human marks the thread “taken over” — the AI stays out of it
   from then on.
-- **Settings & snippet** (bottom of the sidebar): copy the embed snippet, set
-  the agent name / color / welcome message / widget language, pause the widget,
-  and toggle AI replies with an optional extra prompt.
+- **Presence** (your name at the bottom of the sidebar): tap to switch between
+  *Online · you reply* and *Away · bot replies*. You also count as away after a
+  minute without a visible console tab; polling from a background tab does
+  not keep you online. A message that arrived while you were online is picked
+  up by the bot a minute later if nobody answered and you are away by then.
+- **Settings & snippet** (gear icon): copy the embed snippet, set the agent
+  name / color / welcome message / widget language, pause the widget, toggle
+  AI replies, name the bot and upload its avatar (cropped to 128px in the
+  browser), paste the knowledge base or **Sync from repo**, and add extra
+  instructions the bot must follow.
+
+### Knowledge base
+
+The bot's reference material lives in the repo at `public/bot-knowledge.md`
+so it is versioned and deployed with your code. Edit it, deploy, then open
+the console → Settings → **Sync from repo**. The prompt tells the model to
+reproduce the matching section in full and in the visitor's language, and to
+say a human will follow up for anything the file does not cover. Keep
+sections short and factual; a Chinese copy of a section makes Chinese answers
+faithful rather than summarised.
 
 ## Stack
 
@@ -140,7 +166,17 @@ ConnectBot 是一个开源、可自托管的网站在线客服：一个嵌入式
 `window.$relayUser`，后台就能看到访客的真实姓名和头像。
 
 **AI 自动回复：** 配置 `OPENAI_API_KEY`（可用 `OPENAI_BASE_URL` 指向任意
-OpenAI 兼容接口，如 DeepSeek）即启用；人工在会话里回复后 AI 自动退出该会话。
+OpenAI 兼容接口，如 DeepSeek）即启用。人工优先：你在后台（页面可见、1 分钟内有
+活动）时机器人不出声；点左下角自己的名字可手动切到「离线 · 机器人回复」；你回过话
+的会话之后全由你接管。机器人回答时访客看到的是机器人自己的名字和头像。
+
+**知识库：** 把教程和常见问题写进 `public/bot-knowledge.md`，部署后在后台
+「Settings」里点 **Sync from repo** 同步进机器人；机器人会按访客语言完整复述匹配
+的章节，不编造文件里没有的内容。后台还可以给机器人改名、上传头像、追加额外指令。
+
+**撤回：** 访客按住自己的气泡可在 2 分钟内撤回；后台悬停（手机长按）自己或机器人
+的消息可撤回，两端都显示「已撤回一条消息」。后台输入框 Enter 发送、Shift+Enter 换行，
+编号步骤等格式会原样到达访客气泡。
 
 ## License
 

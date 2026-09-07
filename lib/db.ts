@@ -1,5 +1,5 @@
 import { randomBytes } from "crypto";
-import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, or, sql, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import {
   boolean,
@@ -37,7 +37,15 @@ export const sites = pgTable("connectbot_sites", {
   enabled: boolean("enabled").notNull().default(true),
   aiEnabled: boolean("ai_enabled").notNull().default(true),
   aiPrompt: text("ai_prompt").notNull().default(""),
+  /** Reference material (tutorials, FAQ) the bot answers from. */
+  aiKnowledge: text("ai_knowledge").notNull().default(""),
+  /** Name the widget shows while the bot is answering. Empty = "<site> Assistant". */
+  botName: varchar("bot_name", { length: 80 }).notNull().default(""),
+  /** Uploaded bot avatar as a data: URL (≤128px, re-encoded client-side). Empty = /bot-avatar.png. */
+  botAvatar: text("bot_avatar").notNull().default(""),
   agentLastSeenAt: timestamp("agent_last_seen_at"),
+  /** Owner flipped themselves to "away": the bot answers even while they are on the page. */
+  agentAway: boolean("agent_away").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -72,6 +80,8 @@ export const messages = pgTable("connectbot_messages", {
   author: varchar("author", { length: 20 }).notNull(),
   text: text("text").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  /** Set when the sender took the message back; text is blanked at the same time. */
+  recalledAt: timestamp("recalled_at"),
 });
 
 export type Site = typeof sites.$inferSelect;
@@ -137,6 +147,12 @@ export async function ensureTables() {
     CREATE INDEX IF NOT EXISTS connectbot_messages_conv_created
       ON connectbot_messages (conversation_id, created_at)
   `);
+  // Columns added after the first release; safe on databases that predate them.
+  await db.execute(sql`ALTER TABLE connectbot_sites ADD COLUMN IF NOT EXISTS ai_knowledge text NOT NULL DEFAULT ''`);
+  await db.execute(sql`ALTER TABLE connectbot_sites ADD COLUMN IF NOT EXISTS bot_name varchar(80) NOT NULL DEFAULT ''`);
+  await db.execute(sql`ALTER TABLE connectbot_sites ADD COLUMN IF NOT EXISTS bot_avatar text NOT NULL DEFAULT ''`);
+  await db.execute(sql`ALTER TABLE connectbot_sites ADD COLUMN IF NOT EXISTS agent_away boolean NOT NULL DEFAULT false`);
+  await db.execute(sql`ALTER TABLE connectbot_messages ADD COLUMN IF NOT EXISTS recalled_at timestamp`);
   ensured = true;
 }
 
@@ -171,9 +187,33 @@ export async function getSite(): Promise<Site> {
 export type SitePatch = Partial<
   Pick<
     Site,
-    "name" | "color" | "agentName" | "welcomeMessage" | "aiEnabled" | "aiPrompt" | "locale" | "enabled"
+    | "name"
+    | "color"
+    | "agentName"
+    | "welcomeMessage"
+    | "aiEnabled"
+    | "aiPrompt"
+    | "aiKnowledge"
+    | "botName"
+    | "botAvatar"
+    | "agentAway"
+    | "locale"
+    | "enabled"
   >
 >;
+
+/** Cap on the bot avatar data URL: a 128px WebP/JPEG lands well under this. */
+export const BOT_AVATAR_MAX = 60_000;
+/** Hard cap on ai_knowledge, shared by the settings PATCH and the textarea. */
+export const KNOWLEDGE_MAX = 30_000;
+/** How long after sending a visitor can still take a message back. */
+export const RECALL_WINDOW_MS = 2 * 60 * 1000;
+/** Inactivity after which the owner counts as away and the bot takes over. */
+export const PRESENCE_WINDOW_MS = 60 * 1000;
+
+export function botDisplayName(site: Site): string {
+  return site.botName?.trim() || `${site.name} Assistant`;
+}
 
 export async function updateSite(patch: SitePatch): Promise<Site> {
   const site = await getSite();
@@ -189,9 +229,13 @@ export async function touchAgentSeen(id: string): Promise<void> {
   await db.update(sites).set({ agentLastSeenAt: new Date() }).where(eq(sites.id, id));
 }
 
+/**
+ * Online = not switched to away, and a visible console tab hit the API within
+ * the last minute. Drives the widget's badge and whether the bot answers.
+ */
 export function isAgentOnline(site: Site): boolean {
-  if (!site.agentLastSeenAt) return false;
-  return Date.now() - site.agentLastSeenAt.getTime() < 2 * 60 * 1000;
+  if (site.agentAway || !site.agentLastSeenAt) return false;
+  return Date.now() - site.agentLastSeenAt.getTime() < PRESENCE_WINDOW_MS;
 }
 
 // ── Conversations & messages ────────────────────────────────────────────
@@ -281,10 +325,18 @@ export async function listMessages(conversationId: string, after?: Date): Promis
     // truncated to milliseconds, so a plain `>` re-matches the newest row
     // forever. Advance to the next whole millisecond instead.
     const from = new Date(after.getTime() + 1);
+    // A recall changes an old row, so the incremental fetch also returns rows
+    // recalled since the cursor; clients merge by id and advance their cursor
+    // past recalledAt.
     return db
       .select()
       .from(messages)
-      .where(and(eq(messages.conversationId, conversationId), gte(messages.createdAt, from)))
+      .where(
+        and(
+          eq(messages.conversationId, conversationId),
+          or(gte(messages.createdAt, from), gte(messages.recalledAt, from)),
+        ),
+      )
       .orderBy(messages.createdAt)
       .limit(200);
   }
@@ -296,8 +348,58 @@ export async function listMessages(conversationId: string, after?: Date): Promis
     .limit(200);
 }
 
+export async function latestMessage(conversationId: string): Promise<Message | null> {
+  const [row] = await db
+    .select()
+    .from(messages)
+    .where(eq(messages.conversationId, conversationId))
+    .orderBy(desc(messages.createdAt))
+    .limit(1);
+  return row ?? null;
+}
+
+/** Visitor takes back one of their own messages, inside the recall window. */
+export async function recallVisitorMessage(conversation: Conversation, messageId: string): Promise<Message | null> {
+  return recallMessage(conversation, messageId, [
+    eq(messages.author, "visitor"),
+    gte(messages.createdAt, new Date(Date.now() - RECALL_WINDOW_MS)),
+  ]);
+}
+
+/** The owner takes back their own reply or a bot answer. No time window. */
+export async function recallOwnerMessage(conversation: Conversation, messageId: string): Promise<Message | null> {
+  return recallMessage(conversation, messageId, [or(eq(messages.author, "agent"), eq(messages.author, "bot"))!]);
+}
+
+async function recallMessage(conversation: Conversation, messageId: string, extra: SQL[]): Promise<Message | null> {
+  const [updated] = await db
+    .update(messages)
+    .set({ text: "", recalledAt: new Date() })
+    .where(
+      and(
+        eq(messages.id, messageId),
+        eq(messages.conversationId, conversation.id),
+        isNull(messages.recalledAt),
+        ...extra,
+      ),
+    )
+    .returning();
+  if (!updated) return null;
+  const latest = await latestMessage(conversation.id);
+  if (latest?.id === updated.id) {
+    await db.update(conversations).set({ lastMessagePreview: "" }).where(eq(conversations.id, conversation.id));
+  }
+  return updated;
+}
+
 function previewOf(text: string): string {
-  const t = text.replace(/\s+/g, " ").trim();
+  // One line of plain words: drop the markdown marks the bubbles render.
+  const t = text
+    .replace(/\*\*([^*\n]+)\*\*/g, "$1")
+    .replace(/`([^`\n]+)`/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/\s+/g, " ")
+    .trim();
   return t.length > 180 ? `${t.slice(0, 177)}…` : t;
 }
 
@@ -341,6 +443,7 @@ export function serializeMessage(m: Message) {
     author: m.author,
     text: m.text,
     createdAt: m.createdAt.toISOString(),
+    recalledAt: m.recalledAt?.toISOString() ?? null,
   };
 }
 
@@ -361,13 +464,21 @@ export function serializeConversation(c: Conversation) {
 }
 
 export function publicSiteConfig(site: Site) {
+  const online = isAgentOnline(site);
+  // While the owner is away and the bot is switched on, the bot is who the
+  // visitor is talking to, so the header names it and shows it as online.
+  const botActive = !online && site.aiEnabled;
   return {
     publicId: site.publicId,
     name: site.name,
     color: site.color || "#1972F5",
     agentName: site.agentName || "Support",
+    botName: botDisplayName(site),
+    // "" means: load /bot-avatar.png from the widget's own script origin.
+    botAvatar: site.botAvatar?.trim() || "",
     welcomeMessage: site.welcomeMessage || "Hi — how can we help?",
-    online: isAgentOnline(site),
+    online,
+    botActive,
     locale: site.locale || "auto",
     enabled: site.enabled,
   };

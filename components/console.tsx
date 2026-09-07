@@ -7,11 +7,13 @@ import {
   Loader2,
   LogOut,
   Menu,
+  RefreshCw,
   Send,
   Settings,
   Trash2,
   X,
 } from "lucide-react";
+import { ChatMarkdown } from "@/components/chat-markdown";
 
 type Conversation = {
   id: string;
@@ -24,7 +26,25 @@ type Conversation = {
   unread: number;
 };
 
-type Message = { id: string; author: string; text: string; createdAt: string };
+type Message = { id: string; author: string; text: string; createdAt: string; recalledAt?: string | null };
+
+/** Newest created-or-recalled stamp, so a recall doesn't re-trigger the long poll forever. */
+function cursorOf(list: Message[]) {
+  let max = "";
+  for (const m of list) {
+    if (m.createdAt > max) max = m.createdAt;
+    if (m.recalledAt && m.recalledAt > max) max = m.recalledAt;
+  }
+  return max;
+}
+
+/**
+ * Polling from a hidden tab keeps the inbox fresh but must not count as the
+ * owner being present: presence silences the bot.
+ */
+function presence() {
+  return typeof document !== "undefined" && document.visibilityState !== "visible" ? "&bg=1" : "";
+}
 
 type Site = {
   publicId: string;
@@ -34,6 +54,10 @@ type Site = {
   welcomeMessage: string;
   aiEnabled: boolean;
   aiPrompt: string;
+  aiKnowledge: string;
+  botName: string;
+  botAvatar: string;
+  agentAway: boolean;
   aiConfigured: boolean;
   locale: string;
   enabled: boolean;
@@ -180,9 +204,50 @@ function SettingsPanel({
   const [enabled, setEnabled] = useState(site.enabled);
   const [aiEnabled, setAiEnabled] = useState(site.aiEnabled);
   const [aiPrompt, setAiPrompt] = useState(site.aiPrompt);
+  const [aiKnowledge, setAiKnowledge] = useState(site.aiKnowledge ?? "");
+  const [botName, setBotName] = useState(site.botName ?? "");
+  const [botAvatar, setBotAvatar] = useState(site.botAvatar ?? "");
   const [busy, setBusy] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Any image the owner picks becomes a 128px WebP data URL before it is
+  // saved: the row stays small and the widget needs no file host.
+  async function pickAvatar(file: File) {
+    setError(null);
+    try {
+      const bitmap = await createImageBitmap(file);
+      const size = 128;
+      const canvas = document.createElement("canvas");
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext("2d")!;
+      const side = Math.min(bitmap.width, bitmap.height);
+      ctx.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, size, size);
+      let url = canvas.toDataURL("image/webp", 0.86);
+      if (!url.startsWith("data:image/webp")) url = canvas.toDataURL("image/jpeg", 0.86);
+      setBotAvatar(url);
+    } catch {
+      setError("That image could not be read — try another one.");
+    }
+  }
+
+  // Copies public/bot-knowledge.md from this deployment into the knowledge field.
+  async function syncKnowledge() {
+    setSyncing(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/livechat/settings/knowledge", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Sync failed");
+      setAiKnowledge(data.aiKnowledge);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Sync failed");
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   async function save() {
     setBusy(true);
@@ -200,6 +265,9 @@ function SettingsPanel({
           enabled,
           aiEnabled,
           aiPrompt,
+          aiKnowledge,
+          botName,
+          botAvatar,
         }),
       });
       const data = await res.json();
@@ -345,20 +413,102 @@ function SettingsPanel({
               </p>
             )}
             <label className="flex items-center justify-between gap-3 text-[14px] cursor-pointer">
-              <span>AI replies until you join the conversation</span>
+              <span>AI replies while you are away</span>
               {toggle(aiEnabled, setAiEnabled)}
             </label>
+            <p className="text-[12px] text-muted leading-relaxed">
+              No auto-reply while you are online: a console tab visible and active within the last minute, unless
+              you tap your name in the sidebar to go away and let the bot take over. A message that arrived while
+              you were online is answered by the bot if nobody has replied a minute later and you are offline by
+              then. Conversations you have replied in stay yours.
+            </p>
             {aiEnabled && (
-              <label className="block">
-                <span className="text-[12px] font-semibold">Extra instructions for the AI</span>
-                <textarea
-                  className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-[14px] min-h-[80px]"
-                  value={aiPrompt}
-                  onChange={(e) => setAiPrompt(e.target.value)}
-                  maxLength={4000}
-                  placeholder="e.g. We sell Acme. Never invent pricing. Hand off billing questions."
-                />
-              </label>
+              <>
+                <label className="block">
+                  <span className="text-[12px] font-semibold">Bot name</span>
+                  <input
+                    className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-[14px]"
+                    value={botName}
+                    onChange={(e) => setBotName(e.target.value)}
+                    placeholder={`${name.trim() || "My website"} Assistant`}
+                    maxLength={80}
+                  />
+                  <span className="mt-1 block text-[12px] text-muted leading-relaxed">
+                    While you are away and the bot answers, visitors see a robot avatar, this name, and
+                    “AI assistant · Online”.
+                  </span>
+                </label>
+                <div>
+                  <span className="text-[12px] font-semibold">Bot avatar</span>
+                  <div className="mt-1 flex items-center gap-3">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={botAvatar || "/bot-avatar.png"}
+                      alt=""
+                      className="w-12 h-12 rounded-full object-cover ring-1 ring-border bg-white shrink-0"
+                    />
+                    <label className="inline-flex cursor-pointer items-center rounded-full border border-border px-3 py-1.5 text-[12px] font-semibold hover:bg-border/30">
+                      Upload image
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp,image/gif"
+                        className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) pickAvatar(f);
+                          e.target.value = "";
+                        }}
+                      />
+                    </label>
+                    {botAvatar && (
+                      <button type="button" onClick={() => setBotAvatar("")} className="text-[12px] text-muted hover:text-foreground">
+                        Use default
+                      </button>
+                    )}
+                  </div>
+                  <span className="mt-1 block text-[12px] text-muted leading-relaxed">
+                    PNG / JPG / WebP; cropped square and scaled to 128px automatically. Applies on save.
+                  </span>
+                </div>
+                <div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-[12px] font-semibold">Tutorials & FAQ (the AI answers from this)</span>
+                    <button
+                      type="button"
+                      onClick={syncKnowledge}
+                      disabled={syncing}
+                      className="inline-flex items-center gap-1 rounded-full border border-border px-2.5 py-1 text-[11px] font-semibold text-muted hover:text-foreground disabled:opacity-60"
+                      title="public/bot-knowledge.md"
+                    >
+                      {syncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                      Sync from repo
+                    </button>
+                  </div>
+                  <textarea
+                    className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 font-mono text-[13px] min-h-[160px]"
+                    value={aiKnowledge}
+                    onChange={(e) => setAiKnowledge(e.target.value)}
+                    maxLength={30000}
+                    placeholder={"Paste your how-to guide and common questions with their answers, e.g.\n\n## How do I install it?\n1. Open …\n2. Click …"}
+                  />
+                  <span className="mt-1 block text-[12px] text-muted leading-relaxed">
+                    When a visitor asks how to install, set up or use something, the AI reproduces the matching
+                    section from here and does not invent what is not here. “Sync from repo” replaces this text
+                    with public/bot-knowledge.md from the deployed build: edit the file, deploy, then click.{" "}
+                    <span className="text-muted/70">{aiKnowledge.length.toLocaleString()} / 30,000</span>
+                  </span>
+                </div>
+                <label className="block">
+                  <span className="text-[12px] font-semibold">Extra instructions for the AI</span>
+                  <textarea
+                    className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-[14px] min-h-[80px]"
+                    value={aiPrompt}
+                    onChange={(e) => setAiPrompt(e.target.value)}
+                    maxLength={4000}
+                    placeholder="e.g. We sell Acme. Never invent pricing. Hand off billing questions."
+                  />
+                </label>
+              </>
             )}
           </section>
 
@@ -395,7 +545,11 @@ export function Console() {
   const [railOpen, setRailOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  // Own message whose Unsend button is pinned visible after a long-press (touch has no hover).
+  const [recallArmedId, setRecallArmedId] = useState<string | null>(null);
+  const holdRef = useRef<{ timer: ReturnType<typeof setTimeout>; x: number; y: number } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
 
   const loadInbox = useCallback(async () => {
     const res = await fetch("/api/livechat/inbox");
@@ -444,7 +598,7 @@ export function Console() {
       while (!ac.signal.aborted) {
         try {
           const res = await fetch(
-            `/api/livechat/inbox?wait=1&since=${encodeURIComponent(since)}`,
+            `/api/livechat/inbox?wait=1&since=${encodeURIComponent(since)}${presence()}`,
             { signal: ac.signal },
           );
           if (!res.ok) {
@@ -473,14 +627,14 @@ export function Console() {
     let since = new Date(0).toISOString();
     async function pull(wait: boolean) {
       const q = wait
-        ? `/api/livechat/inbox?id=${encodeURIComponent(activeId!)}&wait=1&since=${encodeURIComponent(since)}`
-        : `/api/livechat/inbox?id=${encodeURIComponent(activeId!)}`;
+        ? `/api/livechat/inbox?id=${encodeURIComponent(activeId!)}&wait=1&since=${encodeURIComponent(since)}${presence()}`
+        : `/api/livechat/inbox?id=${encodeURIComponent(activeId!)}${presence()}`;
       const res = await fetch(q, { signal: ac.signal });
       if (!res.ok) return;
       const data = await res.json();
       const next = (data.messages || []) as Message[];
       setMessages(next);
-      since = next.length ? next[next.length - 1].createdAt : new Date().toISOString();
+      since = next.length ? cursorOf(next) : new Date().toISOString();
     }
     async function loop() {
       await pull(false);
@@ -501,10 +655,60 @@ export function Console() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length]);
 
+  function cancelArm() {
+    if (holdRef.current) clearTimeout(holdRef.current.timer);
+    holdRef.current = null;
+  }
+
+  function armRecall(id: string, e: React.PointerEvent) {
+    setRecallArmedId(null);
+    if (e.pointerType === "mouse") return;
+    cancelArm();
+    holdRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      timer: setTimeout(() => {
+        holdRef.current = null;
+        setRecallArmedId(id);
+      }, 450),
+    };
+  }
+
+  function cancelArmIfMoved(e: React.PointerEvent) {
+    const h = holdRef.current;
+    if (h && (Math.abs(e.clientX - h.x) > 8 || Math.abs(e.clientY - h.y) > 8)) cancelArm();
+  }
+
+  async function recallMessage(id: string) {
+    if (!activeId) return;
+    setRecallArmedId(null);
+    const res = await fetch(
+      `/api/livechat/inbox?id=${encodeURIComponent(activeId)}&messageId=${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    );
+    if (!res.ok) return;
+    const data = await res.json();
+    setMessages(data.messages || []);
+    await loadInbox();
+  }
+
+  async function toggleAway() {
+    if (!site) return;
+    const agentAway = !site.agentAway;
+    setSite({ ...site, agentAway });
+    const res = await fetch("/api/livechat/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agentAway }),
+    });
+    if (!res.ok) setSite({ ...site });
+  }
+
   async function sendReply() {
     const text = draft.trim();
     if (!text || !activeId) return;
     setDraft("");
+    if (composerRef.current) composerRef.current.style.height = "auto";
     const res = await fetch("/api/livechat/inbox", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -658,13 +862,30 @@ export function Console() {
           </div>
           {conversationList}
           <div className="shrink-0 border-t border-border px-2 py-2 flex items-center gap-1">
+            {/* Presence switch: tap to go away (bot answers everything) or come back online. */}
+            <button
+              type="button"
+              onClick={toggleAway}
+              disabled={!site}
+              className="flex-1 min-w-0 inline-flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-left hover:bg-border/30"
+              title={site?.agentAway ? "Switch to online: you reply" : "Switch to away: the bot takes every conversation"}
+            >
+              <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${site?.agentAway ? "bg-muted/60" : "bg-success"}`} />
+              <span className="min-w-0">
+                <span className="block truncate text-[13px] font-medium leading-tight">{site?.agentName || "You"}</span>
+                <span className={`block truncate text-[11px] leading-tight ${site?.agentAway ? "text-muted" : "text-success"}`}>
+                  {site?.agentAway ? "Away · bot replies" : "Online · you reply"}
+                </span>
+              </span>
+            </button>
             <button
               type="button"
               onClick={() => setSettingsOpen(true)}
-              className="flex-1 inline-flex items-center gap-2 px-2.5 py-2 rounded-xl text-[13px] font-medium text-muted/80 hover:bg-border/30 hover:text-foreground"
+              aria-label="Settings & snippet"
+              title="Settings & snippet"
+              className="w-8 h-8 flex items-center justify-center rounded-xl text-muted/60 hover:text-foreground hover:bg-border/30"
             >
               <Settings className="w-4 h-4" />
-              Settings & snippet
             </button>
             <button
               type="button"
@@ -732,7 +953,7 @@ export function Console() {
                 </div>
               )}
 
-              <div className="flex-1 overflow-y-auto py-5 px-4 sm:px-6">
+              <div className="flex-1 overflow-y-auto py-5 px-4 sm:px-6" onPointerDown={() => setRecallArmedId(null)}>
                 <div className="max-w-3xl mx-auto w-full space-y-1.5">
                   {messages.map((m, i) => {
                     const prev = i > 0 ? messages[i - 1] : null;
@@ -742,13 +963,46 @@ export function Console() {
                         {dividerLabel(m.createdAt)}
                       </p>
                     );
-                    if (mine) {
+                    if (m.recalledAt) {
                       return (
                         <div key={m.id}>
                           {divider}
-                          <div className="flex flex-col items-end">
-                            <div className="max-w-[80%] sm:max-w-[72%] bg-foreground text-background rounded-2xl rounded-br-sm px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap">
-                              {m.text}
+                          <p className="text-center text-[11px] text-muted/60 py-1">
+                            {mine ? "Message unsent" : "The visitor unsent a message"}
+                          </p>
+                        </div>
+                      );
+                    }
+                    if (mine) {
+                      const armed = recallArmedId === m.id;
+                      return (
+                        <div key={m.id}>
+                          {divider}
+                          <div className="group/msg flex flex-col items-end">
+                            <div className="flex items-center gap-2 max-w-[80%] sm:max-w-[72%]">
+                              {/* Hover reveals it on desktop; a long-press pins it on touch. */}
+                              <button
+                                type="button"
+                                onClick={() => recallMessage(m.id)}
+                                className={`shrink-0 rounded-md px-2 py-1 text-[11px] text-muted hover:text-danger hover:bg-danger/10 transition-opacity ${
+                                  armed ? "opacity-100" : "opacity-0 group-hover/msg:opacity-100 focus-visible:opacity-100"
+                                }`}
+                              >
+                                Unsend
+                              </button>
+                              <div
+                                className="min-w-0 bg-foreground text-background rounded-2xl rounded-br-sm px-4 py-2.5 text-sm leading-relaxed select-none sm:select-text [-webkit-touch-callout:none]"
+                                onPointerDown={(e) => armRecall(m.id, e)}
+                                onPointerUp={cancelArm}
+                                onPointerCancel={cancelArm}
+                                onPointerMove={cancelArmIfMoved}
+                                onContextMenu={(e) => {
+                                  e.preventDefault();
+                                  setRecallArmedId(m.id);
+                                }}
+                              >
+                                <ChatMarkdown text={m.text} />
+                              </div>
                             </div>
                             <span className="text-[10px] text-muted/40 mt-0.5 mr-1">
                               {m.author === "bot" ? "AI · " : ""}
@@ -764,8 +1018,8 @@ export function Console() {
                         <div className="flex gap-3">
                           <VisitorAvatar conversation={active} className="mt-0.5" />
                           <div className="flex flex-col items-start min-w-0 max-w-[80%] sm:max-w-[72%]">
-                            <div className="bg-foreground/5 border border-border rounded-2xl rounded-bl-sm px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap">
-                              {m.text}
+                            <div className="bg-foreground/5 border border-border rounded-2xl rounded-bl-sm px-4 py-2.5 text-sm leading-relaxed">
+                              <ChatMarkdown text={m.text} />
                             </div>
                             <span className="text-[10px] text-muted/40 mt-0.5 ml-1">{timeOf(m.createdAt)}</span>
                           </div>
@@ -785,11 +1039,24 @@ export function Console() {
                     sendReply();
                   }}
                 >
-                  <input
-                    className="flex-1 bg-transparent px-4 py-3 text-sm placeholder:text-muted/40 focus:outline-none"
-                    placeholder="Write a reply…"
+                  {/* Enter sends, Shift+Enter breaks the line, so numbered steps survive to the visitor's bubble. */}
+                  <textarea
+                    ref={composerRef}
+                    rows={1}
+                    className="flex-1 resize-none bg-transparent px-4 py-3 text-sm leading-relaxed placeholder:text-muted/40 focus:outline-none max-h-40"
+                    placeholder="Write a reply… (Shift+Enter for a new line)"
                     value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
+                    onChange={(e) => {
+                      setDraft(e.target.value);
+                      e.target.style.height = "auto";
+                      e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                        e.preventDefault();
+                        sendReply();
+                      }
+                    }}
                   />
                   <div className="flex items-end px-2 pb-2 shrink-0">
                     <button
