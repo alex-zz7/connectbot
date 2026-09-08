@@ -20,7 +20,8 @@ chat; we open-sourced it so you can run yours the same way.
 ## Features
 
 - **Widget** — `public/relay.js`, a dependency-free script in a shadow root.
-  Doesn't leak CSS, full-screen on phones, long-polls for replies, English/中文
+  Doesn't leak CSS, full-screen on phones (the composer stays above the
+  iPhone keyboard on Safari and Chrome), long-polls for replies, English/中文
   chrome that follows the embedding page's `<html lang>`. Renders the light
   markdown the bot writes (numbered steps, bold, links). Visitors can **unsend**
   a message within two minutes by holding their bubble.

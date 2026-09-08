@@ -21,8 +21,6 @@
   window.__RELAY_BOOTED = true;
 
   var script = document.currentScript;
-  // API base = wherever this script was served from. Same-origin embeds fall
-  // back to the page's own origin.
   var BASE = (function () {
     try {
       if (script && script.src) return new URL(script.src).origin;
@@ -85,7 +83,7 @@
     if (script && script.getAttribute("data-site")) return script.getAttribute("data-site");
     var cfg = window.$relay;
     if (cfg && !Array.isArray(cfg) && cfg.siteId) return cfg.siteId;
-    return "default";
+    return "";
   }
 
   function storageKey(site) {
@@ -201,7 +199,8 @@
       ".av svg{width:22px;height:22px;fill:currentColor;}",
       ".row .av svg{width:15px;height:15px;}",
       ".row .av.bot{background:" + color + ";color:#fff;}",
-      ".av.bot{background:#fff;}",
+      ".av.bot,.av.pic{background:#fff;}",
+      ".row .av.pic{background:#e2e8f0;}",
       ".av .botimg{width:100%;height:100%;object-fit:cover;border-radius:50%;display:block;}",
       ".row .av.bot{background:#fff;}",
       ".who{flex:1;min-width:0;}",
@@ -228,6 +227,11 @@
       ".row.me .bubble{background:" + color + ";color:#fff;border-bottom-right-radius:5px;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;}",
       ".row.me.held .bubble{filter:brightness(.85);}",
       ".recalled{align-self:center;color:#94a3b8;font:400 12px/1 system-ui;padding:4px 0;}",
+      ".bubble.typing{display:flex;gap:5px;align-items:center;padding:14px 16px;}",
+      ".bubble.typing i{width:7px;height:7px;border-radius:50%;background:#94a3b8;animation:relay-dot 1.2s infinite ease-in-out;}",
+      ".bubble.typing i:nth-child(2){animation-delay:.2s;}",
+      ".bubble.typing i:nth-child(3){animation-delay:.4s;}",
+      "@keyframes relay-dot{0%,80%,100%{transform:translateY(0);opacity:.5}40%{transform:translateY(-4px);opacity:1}}",
       ".act{position:absolute;z-index:5;transform:translate(-50%,-100%);background:#111827;color:#fff;border-radius:10px;padding:4px;display:flex;gap:2px;box-shadow:0 6px 18px rgba(15,23,42,.25);}",
       ".act:after{content:'';position:absolute;left:50%;bottom:-5px;width:10px;height:10px;background:#111827;transform:translateX(-50%) rotate(45deg);border-radius:2px;}",
       ".act button{border:0;background:transparent;color:inherit;font:500 13px/1 system-ui;padding:7px 12px;border-radius:7px;cursor:pointer;white-space:nowrap;}",
@@ -269,20 +273,38 @@
       ".emoji button:hover{background:#f1f5f9;}",
       ".toast{position:absolute;left:14px;right:14px;bottom:14px;background:#0f172a;color:#fff;font:500 12px/1.35 system-ui;padding:9px 11px;border-radius:9px;text-align:center;}",
       // Full screen on phones. The wrap is an opaque cover pinned to the
-      // layout viewport (inset:0) and must never shrink with the keyboard —
-      // that hole is the landing page flashing through. JS docks only the
-      // panel to visualViewport. Do not put overflow:hidden on the wrap —
-      // iOS scroll-into-view treats that as a scrollport and can push the
-      // chat out of view.
+      // layout viewport and must never be 100lvh: that is the large viewport
+      // and stays tall while Chrome shrinks the layout around the keyboard,
+      // so the header jumps and the composer sits under the keys. It is
+      // position:absolute at the document's top, NOT fixed: on iOS 26 Chrome
+      // mis-places fixed layers by its toolbar height (WebKit 297779 /
+      // Chromium 446714234). The page is locked at scroll 0, so top:0 is the
+      // viewport top. Height is 100dvh so the engine tracks the layout
+      // viewport, including Chrome's keyboard frame change. Do not put
+      // overflow:hidden on the wrap — iOS scroll-into-view treats that as a
+      // scrollport and can push the chat out of view.
       "@media(max-width:520px){",
-      ".wrap.open{position:fixed;inset:0;background:#fff;z-index:2147483000;}",
+      ".wrap.open{position:absolute;top:0;left:0;width:100%;height:100vh;height:100dvh;background:#fff;z-index:2147483000;}",
       ".wrap.open .panel{position:absolute;inset:0;width:100%;height:100%;min-height:0;border-radius:0;transform:none;transition:none;}",
       ".panel{right:0;left:0;top:0;bottom:0;width:100%;min-height:0;height:100%;border-radius:0;transform:none;transition:none;}",
       ".wrap.open .fab{display:none;}",
       ".head{padding-top:calc(12px + env(safe-area-inset-top,0px));}",
       ".foot{padding-bottom:calc(8px + env(safe-area-inset-bottom,0px));}",
+      // Keyboard up: the home-indicator inset now sits under the keys, so
+      // keeping it would float the composer above them. The top inset is
+      // untouched: a keyboard never covers the status bar, and toggling the
+      // header's padding moved its contents on every keyboard transition.
+      ".panel.kb .foot{padding-bottom:8px;}",
       "textarea{font-size:16px;}",
       ".fab{right:16px;bottom:calc(16px + env(safe-area-inset-bottom,0px));}",
+      // Thumb-sized controls: 32px buttons are easy to miss on a phone.
+      ".min{width:40px;height:40px;}",
+      ".icon,.send{width:40px;height:40px;}",
+      ".icon svg,.send svg{width:22px;height:22px;}",
+      ".jump{width:40px;height:40px;bottom:16px;}",
+      ".emoji button{width:40px;height:40px;font-size:22px;}",
+      ".bubble{font-size:16px;}",
+      ".act button{padding:10px 16px;font-size:15px;}",
       "}",
     ].join("");
   };
@@ -377,6 +399,7 @@
         agentName: "Support",
         botName: "",
         botAvatar: "",
+        agentAvatar: "",
         welcomeMessage: "",
         online: false,
         botActive: false,
@@ -384,6 +407,8 @@
         enabled: true,
       },
       lastReadAt: null,
+      takenOver: false,
+      awaitingBot: 0,
       stopped: false,
       emojiOpen: false,
     };
@@ -411,16 +436,40 @@
     }
 
     var keepKb = false;
-    var holdFull = false;
     var hostLockStyle = null;
     try { sessionStorage.removeItem("relay_kb"); } catch (e) {}
 
-    // Phone layout: the WRAP is a full-layout-viewport white cover. The
-    // PANEL docks to visualViewport so the composer stays above the
-    // keyboard. Never shrink the wrap to vv — that left a hole of the
-    // host page between the composer and the iOS keyboard. Never size
-    // the panel from innerHeight - vv.height (double-subtract). Never
-    // persist a keyboard px. Keep in sync with lib/livechat/viewport-dock.ts.
+    // ── Phone layout ─────────────────────────────────────────────────────
+    // The WRAP is a white cover over the layout viewport (absolute at the
+    // document's top, 100dvh). The PANEL fills it, except when Safari reports
+    // a keyboard inset:
+    //
+    //   kb = innerHeight - visualViewport.height - visualViewport.offsetTop
+    //
+    // Safari keeps the layout viewport and shrinks the visual one
+    // (714 - 376 - 0 = 338) — the panel is then ih - kb tall. Chrome for iOS
+    // shrinks the layout viewport itself (414 - 414 = 0) — the wrap already
+    // is the band and the panel fills it. The panel is never translated.
+    // Measure on viewport events and on a 100ms poll while focused (Chrome
+    // delivers resize late). Any window scroll while open is undone.
+    //
+    // After 完成 Chrome expands the layout viewport while the visual one is
+    // still the keyboard band (ih 741, vv 414 → inset 327). That looks like
+    // a Safari keyboard. Applying it shrinks the panel (composer jumps up).
+    // Ignore every inset until the next real focus.
+    var KB_SETTLE_MS = 80;
+    var KB_ANIM_MS = 250;
+    var KB_POLL_MS = 100;
+    var kb = 0;          // committed keyboard inset
+    var kbPending = -1;
+    var kbSince = 0;
+    var kbTimer = 0;
+    var kbFrame = 0;
+    var kbPoll = 0;
+    var lastSnap = 0;
+    var kbClosed = false;
+    var blurAt = 0;
+
     function resetShellScroll() {
       try {
         if (wrap.scrollTop) wrap.scrollTop = 0;
@@ -431,97 +480,162 @@
     }
 
     function clearPanelInline() {
-      panel.style.top = "";
-      panel.style.left = "";
-      panel.style.right = "";
-      panel.style.bottom = "";
-      panel.style.width = "";
       panel.style.height = "";
       panel.style.maxHeight = "";
-      panel.style.paddingBottom = "";
       panel.style.transition = "";
+      panel.classList.remove("kb");
     }
 
-    function coverLayoutViewport() {
-      // Drop leftover inline geometry so .wrap.open { inset:0 } covers the
-      // layout viewport. Do not assign top/height here — that is what used
-      // to punch a hole down to the host page.
-      wrap.style.position = "";
-      wrap.style.inset = "";
-      wrap.style.top = "";
-      wrap.style.left = "";
-      wrap.style.right = "";
-      wrap.style.bottom = "";
-      wrap.style.width = "";
-      wrap.style.height = "";
+    function keyboardInset(vv, innerHeight) {
+      var ih = Math.round(innerHeight);
+      if (!vv) return 0;
+      var h = Math.round(vv.height);
+      if (h < 160 || h > ih) return 0;
+      var top = Math.max(0, Math.round(vv.offsetTop || 0));
+      var inset = ih - h - top;
+      return inset < 40 ? 0 : inset;
     }
 
-    function undockFromVisualViewport() {
-      wrap.style.position = "";
-      wrap.style.inset = "";
-      wrap.style.top = "";
-      wrap.style.left = "";
-      wrap.style.right = "";
-      wrap.style.bottom = "";
-      wrap.style.width = "";
-      wrap.style.height = "";
-      clearPanelInline();
-      resetShellScroll();
-    }
-
-    function restorePanelNow() {
-      if (!state.open || !isPhone()) return;
-      holdFull = true;
-      coverLayoutViewport();
-      clearPanelInline();
-      resetShellScroll();
-    }
-
-    function dockToVisualViewport() {
-      if (!state.open || !isPhone()) {
-        undockFromVisualViewport();
-        return;
+    function applyKb(value, animate, why) {
+      kb = kbClosed ? 0 : value;
+      if (!state.open || !isPhone()) { clearPanelInline(); return; }
+      var ih = Math.round(window.innerHeight);
+      panel.style.transition = animate ? "height " + KB_ANIM_MS + "ms ease-out" : "";
+      if (kb <= 0) {
+        // Fill the wrap. On Chrome the wrap is already the keyboard band
+        // (100dvh == innerHeight). A pixel height here is what put the
+        // composer under the keys when 100lvh / a stale floor won.
+        panel.style.height = "";
+        panel.style.maxHeight = "";
+        panel.classList.remove("kb");
+      } else {
+        var height = Math.max(160, ih - kb);
+        panel.style.height = height + "px";
+        panel.style.maxHeight = height + "px";
+        panel.classList.add("kb");
       }
-      if (holdFull) {
-        var live = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-        if (live < window.innerHeight - 24) return;
-        holdFull = false;
-      }
-      resetShellScroll();
-      coverLayoutViewport();
+      noteDock(why || "apply");
+    }
 
+    // The page is locked while the panel is open, so any scroll the engine
+    // performed to "reveal" the composer is wrong and undone. Throttled to a
+    // frame so a stubborn engine cannot turn this into jitter.
+    function snapScroll() {
+      var sy = window.scrollY || window.pageYOffset || 0;
       var vv = window.visualViewport;
-      // Same as lib/livechat/viewport-dock.ts — never chase offsetTop.
-      // iOS sets it while scrolling the input into view; applying it is
-      // the "jumps too high, then settles" bounce.
-      var width = vv ? Math.round(vv.width) : Math.round(window.innerWidth);
-      var height = vv ? Math.round(vv.height) : Math.round(window.innerHeight);
-      if (height < 160) height = Math.round(window.innerHeight);
-      if (width < 160) width = Math.round(window.innerWidth);
-
-      panel.style.position = "absolute";
-      panel.style.inset = "auto";
-      panel.style.top = "0";
-      panel.style.left = "0";
-      panel.style.right = "auto";
-      panel.style.bottom = "auto";
-      panel.style.width = width + "px";
-      panel.style.height = height + "px";
-      panel.style.maxHeight = height + "px";
+      var panned = vv && Math.round(vv.offsetTop || 0) > 0;
+      if ((sy > 0 || panned) && Date.now() - lastSnap > 16) {
+        lastSnap = Date.now();
+        try { window.scrollTo({ top: 0, left: 0, behavior: "auto" }); } catch (e) { window.scrollTo(0, 0); }
+        if (document.scrollingElement) document.scrollingElement.scrollTop = 0;
+      }
+      resetShellScroll();
     }
 
-    function onViewportChange() {
-      if (!state.open || !isPhone()) {
-        undockFromVisualViewport();
+    function measure() {
+      if (!state.open || !isPhone()) { clearPanelInline(); return; }
+      snapScroll();
+      if (kbClosed) {
+        if (kb > 0) applyKb(0, true, "hold");
+        else noteDock("hold");
         return;
       }
-      dockToVisualViewport();
+      var next = keyboardInset(window.visualViewport, window.innerHeight);
+      var now = Date.now();
+      if (next === kb) {
+        if (kbPending !== -1) { kbPending = -1; clearTimeout(kbTimer); kbTimer = 0; }
+        noteDock("same");
+        return;
+      }
+      if (next !== kbPending) { kbPending = next; kbSince = now; }
+      var held = now - kbSince;
+      if (held >= KB_SETTLE_MS) {
+        kbPending = -1;
+        applyKb(next, true, "settle");
+      } else {
+        clearTimeout(kbTimer);
+        kbTimer = setTimeout(measure, KB_SETTLE_MS - held + 1);
+        noteDock("wait");
+      }
     }
 
-    // iOS scroll-into-view moves visualViewport.offsetTop and the panel's
-    // scrollTop. Undo the scroll; do not dock from it (that re-applies the jump).
-    function onViewportScroll() {
-      resetShellScroll();
+    // Coalesce the burst of viewport events during the keyboard animation.
+    function scheduleMeasure() {
+      if (kbFrame) return;
+      kbFrame = requestAnimationFrame(function () { kbFrame = 0; measure(); });
+    }
+
+    // Events are not enough on Chrome for iOS: poll while the composer is
+    // focused, and for a second after it loses focus so the close is caught.
+    var pollUntil = 0;
+    function startPoll(ms) {
+      pollUntil = Math.max(pollUntil, Date.now() + (ms || 0));
+      if (kbPoll) return;
+      kbPoll = setInterval(function () {
+        if (!state.open || !isPhone()) { stopPoll(); return; }
+        var focused = shadow.activeElement === input;
+        if (!focused && Date.now() > pollUntil) { stopPoll(); return; }
+        measure();
+      }, KB_POLL_MS);
+    }
+    function stopPoll() {
+      if (kbPoll) clearInterval(kbPoll);
+      kbPoll = 0;
+    }
+
+    // Keyboard going away. Latch closed even when kb was already 0
+    // (Chrome's shrink model) so the mid-close "ih grew, vv hasn't"
+    // reading cannot lift the composer.
+    function releaseLift() {
+      if (!state.open || !isPhone()) return;
+      kbClosed = true;
+      blurAt = Date.now();
+      kbPending = -1;
+      clearTimeout(kbTimer);
+      kbTimer = 0;
+      if (kb > 0) applyKb(0, true, "release");
+    }
+
+    var lastEvent = "";
+    function onViewportChange() { lastEvent = "resize"; scheduleMeasure(); }
+    function onViewportScroll() { lastEvent = "scroll"; scheduleMeasure(); }
+
+    // Opt-in readout for chasing keyboard bugs on a phone without a debugger:
+    // open the page with ?relaydebug=1 and screenshot. Header line shows the
+    // latest reading; the grey box keeps the last ten.
+    var DOCK_DEBUG = /(?:[?&#])relaydebug=1/.test(location.search + location.hash);
+    var dockDebugText = "";
+    var dockLog = [];
+    var dockLogEl = null;
+    var lastLogKey = "";
+    var dockT0 = Date.now();
+    function noteDock(why) {
+      if (!DOCK_DEBUG) return;
+      var vv = window.visualViewport;
+      dockDebugText =
+        "ih " + Math.round(window.innerHeight) +
+        " vv " + (vv ? Math.round(vv.height) + "@" + Math.round(vv.offsetTop) : "-") +
+        " sy " + Math.round(window.scrollY || 0) +
+        " kb " + kb + (kbClosed ? " closed" : "") +
+        (kbPending >= 0 && kbPending !== kb ? "→" + kbPending : "") +
+        " h " + (panel.style.height || "auto");
+      subEl.textContent = dockDebugText;
+      var tag = (why || "") + (lastEvent ? "/" + lastEvent : "");
+      lastEvent = "";
+      // The poll repeats unchanged readings ten times a second; log a line
+      // only when the reading or the decision changed.
+      var key = tag + " " + dockDebugText;
+      if (key !== lastLogKey) {
+        lastLogKey = key;
+        dockLog.push(((Date.now() - dockT0) / 1000).toFixed(2) + " " + key);
+        if (dockLog.length > 20) dockLog.shift();
+      }
+      if (!dockLogEl) {
+        dockLogEl = document.createElement("pre");
+        dockLogEl.style.cssText = "position:absolute;left:6px;right:6px;top:6px;z-index:9;margin:0;padding:6px 8px;background:rgba(17,24,39,.85);color:#fff;font:9px/1.3 ui-monospace,Menlo,monospace;border-radius:8px;white-space:pre-wrap;pointer-events:none;";
+        wrap.querySelector(".mid").appendChild(dockLogEl);
+      }
+      dockLogEl.textContent = dockLog.join("\n");
     }
 
     function setOpenFlag(open) {
@@ -594,6 +708,9 @@
 
     function teardown() {
       state.stopped = true;
+      if (kbFrame) cancelAnimationFrame(kbFrame);
+      clearTimeout(kbTimer);
+      stopPoll();
       if (langObserver) langObserver.disconnect();
       document.removeEventListener("pointerdown", onDocPointerDown, true);
       window.removeEventListener("wheel", onWidgetWheel, true);
@@ -602,8 +719,9 @@
         window.visualViewport.removeEventListener("scroll", onViewportScroll);
       }
       window.removeEventListener("resize", onViewportChange);
-      holdFull = false;
-      undockFromVisualViewport();
+      kb = 0;
+      clearPanelInline();
+      wrap.style.height = "";
       try {
         if (navigator.virtualKeyboard) {
           navigator.virtualKeyboard.removeEventListener("geometrychange", onViewportChange);
@@ -683,14 +801,23 @@
         escapeHtml(JSON.stringify(ICONS.bot)) + '">';
     }
 
+    // The owner's face: their upload or X profile picture from the config,
+    // else the default shipped with the site; initials if the image 404s.
+    function agentImg(name) {
+      var src = state.config.agentAvatar || (BASE + "/agent-avatar.jpg");
+      return '<img class="botimg" alt="" src="' + escapeHtml(src) + '" onerror="this.outerHTML=' +
+        escapeHtml(JSON.stringify(escapeHtml(initials(name)))) + '">';
+    }
+
     function applyTheme() {
       style.textContent = css(state.config.color || "#1972F5");
       var who = speaker();
-      avEl.innerHTML = (who.bot ? botImg() : escapeHtml(initials(who.name))) + '<span class="dot"></span>';
+      avEl.innerHTML = (who.bot ? botImg() : agentImg(who.name)) + '<span class="dot"></span>';
       dotEl = wrap.querySelector(".dot");
       avEl.classList.toggle("bot", who.bot);
+      avEl.classList.toggle("pic", true);
       nameEl.textContent = who.name + " " + T.from + " " + state.config.name;
-      subEl.textContent = who.online ? (who.bot ? T.botOnline : T.online) : T.offline;
+      subEl.textContent = dockDebugText || (who.online ? (who.bot ? T.botOnline : T.online) : T.offline);
       dotEl.classList.toggle("off", !who.online);
     }
 
@@ -741,19 +868,31 @@
       jumpBtn.hidden = nearBottom();
     }
 
-    function unreadCount() {
-      var n = 0;
-      var i;
-      for (i = 0; i < state.messages.length; i++) {
-        if (state.messages[i].author === "visitor") continue;
-        n++;
+    // What the visitor has seen is a per-device stamp: the newest message that
+    // was on screen while the panel was open. The badge used to count against
+    // the OWNER's read stamp, so it never cleared after the visitor read the
+    // replies and closed the panel.
+    function seenKey() {
+      return "relay_seen_" + state.siteId;
+    }
+
+    function markSeen() {
+      var newest = "";
+      for (var i = 0; i < state.messages.length; i++) {
+        if (state.messages[i].createdAt > newest) newest = state.messages[i].createdAt;
       }
-      if (!state.lastReadAt) return n;
-      var t = new Date(state.lastReadAt).getTime();
-      n = 0;
-      for (i = 0; i < state.messages.length; i++) {
+      if (!newest) return;
+      try { localStorage.setItem(seenKey(), newest); } catch (e) {}
+    }
+
+    function unreadCount() {
+      var seen = "";
+      try { seen = localStorage.getItem(seenKey()) || ""; } catch (e) {}
+      var n = 0;
+      for (var i = 0; i < state.messages.length; i++) {
         var m = state.messages[i];
-        if (m.author !== "visitor" && new Date(m.createdAt).getTime() > t) n++;
+        if (m.author === "visitor" || m.recalledAt) continue;
+        if (!seen || m.createdAt > seen) n++;
       }
       return n;
     }
@@ -816,18 +955,23 @@
         }
         // Each bubble is labelled by who wrote it, not by who is online now:
         // a bot answer stays the bot's after the owner comes back.
-        var fromBot = m.author === "bot" || (m.id === "welcome" && speaker().bot);
+        // The synthetic welcome belongs to whoever is answering right now; real
+        // messages keep their author.
+        var fromBot = m.id === "welcome" ? speaker().bot : m.author === "bot";
         var authorName = fromBot ? (state.config.botName || state.config.agentName) : state.config.agentName;
         if (!mine) html.push('<div class="aname">' + escapeHtml(authorName) + "</div>");
         html.push(
           '<div class="row ' + (mine ? "me" : "them") + '" data-id="' + escapeHtml(m.id) + '">' +
-            (mine ? "" : '<div class="av' + (fromBot ? " bot" : "") + '">' + (fromBot ? botImg() : escapeHtml(initials(authorName))) + "</div>") +
+            (mine ? "" : '<div class="av pic' + (fromBot ? " bot" : "") + '">' + (fromBot ? botImg() : agentImg(authorName)) + "</div>") +
             '<div class="bubble">' + formatMessage(m.text) + "</div>" +
           "</div>"
         );
-        if (mine && i === list.length - 1 && state.lastReadAt) {
+        if (mine && i === list.length - 1 && state.lastReadAt && state.lastReadAt >= m.createdAt) {
           html.push('<div class="meta">✓✓ ' + T.seen + "</div>");
         }
+      }
+      if (typingVisible()) {
+        html.push('<div class="row them typing-row"><div class="av bot">' + botImg() + '</div><div class="bubble typing"><i></i><i></i><i></i></div></div>');
       }
       var joined = html.join("") || '<div class="time">' + T.empty + "</div>";
       if (joined !== lastHtml) {
@@ -840,8 +984,39 @@
       } else if (force) {
         scrollToBottom();
       }
+      if (state.open) markSeen();
       updateJump();
       updateBadge();
+    }
+
+    // Three bouncing dots while the bot is composing. The model takes 5–20 s;
+    // with nothing on screen a visitor on a phone assumes the message was
+    // lost and taps send again. Shown only when the bot will actually answer.
+    var TYPING_MAX_MS = 30000;
+    var typingTimer = null;
+    function typingVisible() {
+      if (!state.awaitingBot) return false;
+      if (Date.now() - state.awaitingBot > TYPING_MAX_MS) {
+        state.awaitingBot = 0;
+        return false;
+      }
+      for (var i = 0; i < state.messages.length; i++) {
+        var m = state.messages[i];
+        if (m.author !== "visitor" && new Date(m.createdAt).getTime() >= state.awaitingBot - 2000) {
+          state.awaitingBot = 0;
+          return false;
+        }
+      }
+      return true;
+    }
+    function expectBotReply() {
+      if (!state.config.botActive || state.takenOver) return;
+      state.awaitingBot = Date.now();
+      clearTimeout(typingTimer);
+      typingTimer = setTimeout(function () {
+        state.awaitingBot = 0;
+        render();
+      }, TYPING_MAX_MS + 100);
     }
 
     function mergeMessages(incoming) {
@@ -974,7 +1149,9 @@
             pageUrl: location.href,
           }, identityMeta())),
         });
+        if (typeof data.takenOver === "boolean") state.takenOver = data.takenOver;
         if (data.message) mergeMessages([data.message]);
+        expectBotReply();
         render(true);
         setTimeout(poll, 600);
       } catch (e) {
@@ -993,10 +1170,15 @@
       wrap.classList.add("open");
       fab.innerHTML = ICONS.close;
       setOpenFlag(true);
-      // Paint the full-screen cover before lockPage jumps the host page.
-      if (isPhone()) coverLayoutViewport();
       lockPage();
-      dockToVisualViewport();
+      kb = 0;
+      kbClosed = false;
+      kbPending = -1;
+      blurAt = 0;
+      clearTimeout(kbTimer);
+      kbTimer = 0;
+      clearPanelInline();
+      scheduleMeasure();
       updateBadge();
       render(true);
       ensureSession().then(function () {
@@ -1027,8 +1209,15 @@
       badge = wrap.querySelector(".badge");
       setOpenFlag(false);
       unlockPage();
-      holdFull = false;
-      undockFromVisualViewport();
+      kb = 0;
+      kbClosed = false;
+      kbPending = -1;
+      clearTimeout(kbTimer);
+      kbTimer = 0;
+      stopPoll();
+      clearPanelInline();
+      wrap.style.height = "";
+      resetShellScroll();
       updateBadge();
       hideEmoji();
       pinHostScroll(y);
@@ -1170,35 +1359,53 @@
     sendBtn.addEventListener("pointerdown", armKeepKb);
     smileBtn.addEventListener("pointerdown", armKeepKb);
     input.addEventListener("touchend", function (e) {
-      if (document.activeElement === input) return;
+      // Inside a shadow root document.activeElement is the host, never the
+      // textarea, so the old check never matched: every tap on an already
+      // focused composer was swallowed and the caret could not be moved.
+      if (shadow.activeElement === input) return;
+      // 完成's leftover tap lands on this field. Swallow it so we do not
+      // refocus mid-close. A later tap opens the keyboard normally.
+      if (kbClosed && blurAt && Date.now() - blurAt < 450) {
+        e.preventDefault();
+        return;
+      }
       e.preventDefault();
       focusComposer();
     });
     input.addEventListener("focus", function () {
       keepKb = false;
-      holdFull = false;
-      resetShellScroll();
-      dockToVisualViewport();
+      // Do not blur() here when a keyboard inset is already showing: that
+      // left the keys up and the panel full-height, covering the composer.
+      // A leftover 完成 focus keeps kbClosed so the fake inset is ignored.
+      if (kbClosed && blurAt && Date.now() - blurAt < 450) {
+        startPoll(450);
+        return;
+      }
+      kbClosed = false;
+      snapScroll();
+      scheduleMeasure();
+      startPoll(0);
     });
     input.addEventListener("blur", function () {
       if (keepKb) {
         keepKb = false;
         return;
       }
-      // Expand on this turn. Waiting for visualViewport.resize is the stall.
-      // The wrap already covers the layout viewport, so this cannot flash
-      // the host page. Later shrink events are ignored until the keyboard is gone.
-      restorePanelNow();
+      releaseLift();
+      startPoll(1200);
     });
     input.addEventListener("input", function () {
       resize();
       sendBtn.classList.toggle("on", !!(input.value || "").trim());
     });
     input.addEventListener("keydown", function (e) {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        send();
-      }
+      if (e.key !== "Enter" || e.shiftKey) return;
+      // Enter inside an IME (pinyin candidates) confirms the composition; it
+      // must not send half a word. On phones the return key inserts a line
+      // break and the send button sends, like every messaging app.
+      if (e.isComposing || e.keyCode === 229 || isPhone()) return;
+      e.preventDefault();
+      send();
     });
     smileBtn.addEventListener("click", function () {
       if (state.emojiOpen) { hideEmoji(); return; }
@@ -1272,7 +1479,8 @@
   }
 
   function start() {
-    boot(siteIdFromPage());
+    var id = siteIdFromPage();
+    if (id) boot(id);
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);
